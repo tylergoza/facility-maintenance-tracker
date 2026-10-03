@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="page-head"><div><h1>Settings</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="/admin/settings" class="form">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="site_name">Site name</label>
+      <input id="site_name" name="site_name" value="{{.SiteNameValue}}" required>
+    </div>
+    <div class="field">
+      <label for="due_soon_days">"Due soon" window (days)</label>
+      <input id="due_soon_days" name="due_soon_days" type="number" min="1" max="365" value="{{.DueSoonDays}}" required>
+      <p class="hint">Tasks due within this many days are flagged as "Due soon" on the dashboard.</p>
+    </div>
+    <div class="form__actions"><button type="submit" class="btn btn--primary">Save settings</button></div>
+  </form>
+</div>
+
+<div class="card narrow">
+  <h2>Backup</h2>
+  <p>This site holds {{pluralize .Counts.Buildings "building"}}, {{pluralize .Counts.Rooms "room"}}, {{pluralize .Counts.Items "item"}} and {{pluralize .Counts.Tasks "active task"}}.</p>
+  <p>Download a complete copy of the database. To move the site to another server, stop the app there, put this file at its database path, and start it again.</p>
+  <a class="btn" href="/admin/backup" download>Download backup</a>
+</div>
+{{end}}

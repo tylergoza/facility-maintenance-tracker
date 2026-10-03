@@ -1,0 +1,120 @@
+{{define "content"}}
+{{$s := .Supply}}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="/supplies">Supplies</a> › <a href="/buildings/{{$s.BuildingID}}">{{$s.BuildingName}}</a>{{if $s.RoomID}} › <a href="/rooms/{{$s.RoomID}}">{{roomLabel $s.RoomNumber $s.RoomName}}</a>{{end}}
+</nav>
+<div class="page-head">
+  <div>
+    <h1>{{$s.Name}}</h1>
+    <p class="muted">{{$s.Location}}</p>
+  </div>
+  <div class="page-head__actions">
+    <a class="btn btn--ghost btn--sm" href="/supplies/{{$s.ID}}/edit">Edit</a>
+    {{template "delete-button" (dict "Action" (printf "/supplies/%d/delete" $s.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s and its history?" $s.Name))}}
+  </div>
+</div>
+
+<div class="card supply-stock">
+  {{if $s.Reusable}}
+    <dl class="supply-buckets">
+      <div><dt>Clean on hand</dt><dd><span class="supply-stock__qty">{{$s.Quantity}}</span> {{template "stock-badge" $s}}</dd></div>
+      <div><dt>In use</dt><dd><span class="supply-stock__qty">{{$s.InUse}}</span></dd></div>
+      <div><dt>Out for cleaning</dt><dd><span class="supply-stock__qty">{{$s.Cleaning}}</span></dd></div>
+    </dl>
+    <p class="muted small">{{$s.Total}}{{if $s.Unit}} {{$s.Unit}}{{end}} in all · {{if $s.ReorderAt}}Low at {{$s.ReorderAt}} or fewer clean.{{else}}Flagged only when no clean ones are left.{{end}}</p>
+  {{else}}
+    <div class="supply-stock__count">
+      <span class="supply-stock__qty">{{$s.Quantity}}</span>
+      <span class="muted">{{if $s.Unit}}{{$s.Unit}} {{end}}on hand</span>
+      {{template "stock-badge" $s}}
+    </div>
+    <p class="muted small">{{if $s.ReorderAt}}Low at {{$s.ReorderAt}} or fewer.{{else}}Flagged only when out.{{end}}</p>
+  {{end}}
+
+  <form method="post" action="/supplies/{{$s.ID}}/adjust" class="form" data-controller="reveal" data-action="change->reveal#update">
+    {{template "csrf" .CSRF}}
+    <fieldset class="fieldset">
+      <legend>Update count</legend>
+      <div class="segmented" role="radiogroup" aria-label="What happened">
+        {{if $s.Reusable}}
+          <label><input type="radio" name="kind" value="swapped" checked> Swapped dirty for clean</label>
+          <label><input type="radio" name="kind" value="put_in_use"> Put in use</label>
+          <label><input type="radio" name="kind" value="sent_cleaning"> Sent for cleaning</label>
+          <label><input type="radio" name="kind" value="returned"> Back from cleaning</label>
+          <label><input type="radio" name="kind" value="restocked"> Bought new</label>
+          <label><input type="radio" name="kind" value="retired"> Thrown out</label>
+          <label><input type="radio" name="kind" value="counted"> Set clean count</label>
+        {{else}}
+          <label><input type="radio" name="kind" value="used" checked> Used</label>
+          <label><input type="radio" name="kind" value="restocked"> Restocked</label>
+          <label><input type="radio" name="kind" value="counted"> Set count</label>
+        {{end}}
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="amount">How many</label>
+          <input id="amount" name="amount" type="number" min="0" step="1" inputmode="numeric" value="1" required>
+        </div>
+        {{if $s.Reusable}}
+          <div class="field" data-reveal-target="section" data-reveal-when="kind=retired">
+            <label for="from">Thrown out from</label>
+            <select id="from" name="from">
+              <option value="cleaning">Out for cleaning</option>
+              <option value="in_use">In use</option>
+              <option value="stock">Clean on hand</option>
+            </select>
+          </div>
+        {{end}}
+        <div class="field">
+          <label for="note">Note <span class="optional">optional</span></label>
+          <input id="note" name="note" placeholder="{{if $s.Reusable}}e.g. Sent to ABC Laundry, worn through{{else}}e.g. Christmas Eve service, bought at Costco{{end}}">
+        </div>
+      </div>
+      <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
+    </fieldset>
+  </form>
+</div>
+
+{{if $s.Notes}}<div class="card notes">{{range lines $s.Notes}}<p>{{.}}</p>{{end}}</div>{{end}}
+
+{{if .Tasks}}
+<section class="section">
+  <h2 class="section__title">Used by <span class="count">{{len .Tasks}}</span></h2>
+  <ul class="plain-list">
+    {{range .Tasks}}
+      <li>
+        <a href="/items/{{.ItemID}}"><strong>{{.ItemName}}</strong></a>: {{.Name}}, {{.SupplyAmount}} {{if .SupplyAlways}}each time{{else}}when needed{{end}}
+        <span class="muted small">· {{.Location}} · {{if .NextDueOn}}next due {{fmtDate .NextDueOn}}{{else}}not scheduled{{end}}</span>
+      </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+
+<section class="section">
+  <h2 class="section__title">History <span class="count">{{len .Changes}}</span></h2>
+  {{if .Changes}}
+    <div class="table-wrap">
+      <table class="table table--stack">
+        <thead><tr><th>When</th><th>Change</th><th class="num">{{if $s.Reusable}}How many{{else}}Amount{{end}}</th><th class="num">{{if $s.Reusable}}Clean / in use / cleaning{{else}}On hand{{end}}</th><th>By</th></tr></thead>
+        <tbody>
+          {{range .Changes}}
+            <tr>
+              <td data-label="When">{{fmtTime .CreatedAt}}</td>
+              <td data-label="Change"><div><strong>{{.KindLabel}}</strong>{{if .Note}}<div class="small">{{.Note}}</div>{{end}}</div></td>
+              {{if $s.Reusable}}
+                <td data-label="How many" class="num">{{.Amount}}</td>
+                <td data-label="Afterwards" class="num">{{.QuantityAfter}} / {{.InUseAfter}} / {{.CleaningAfter}}</td>
+              {{else}}
+                <td data-label="Amount" class="num">{{if gt .Delta 0}}+{{end}}{{.Delta}}</td>
+                <td data-label="On hand" class="num">{{.QuantityAfter}}</td>
+              {{end}}
+              <td data-label="By">{{.CreatedBy}}</td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  {{end}}
+</section>
+{{end}}

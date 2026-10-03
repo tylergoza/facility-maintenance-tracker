@@ -1,0 +1,6 @@
+# Caddy gets and renews HTTPS certificates automatically. HTTPS is required
+# for the "Install app" (PWA) feature on phones.
+maintenance.example.org {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080
+}

@@ -1,0 +1,70 @@
+{{define "content"}}
+<div class="page-head"><div><h1>{{.Title}}</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  {{if not .Buildings}}
+    <p>You need to <a href="/buildings/new">add a building</a> before adding items.</p>
+  {{else}}
+  <form method="post" action="{{if .Form.ID}}/items/{{.Form.ID}}{{else}}/items{{end}}" class="form"
+        data-controller="room-select">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Form.Name}}" required autofocus placeholder="e.g. Furnace #2, Fire extinguisher by kitchen door">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="building_id">Building</label>
+        <select id="building_id" name="building_id" required data-room-select-target="building" data-action="room-select#filter">
+          <option value="">Choose…</option>
+          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Form.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="room_id">Room <span class="optional">optional</span></label>
+        <select id="room_id" name="room_id" data-room-select-target="room">
+          <option value="">— Building-wide / no room —</option>
+          {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label for="category">Category <span class="optional">optional</span></label>
+      <input id="category" name="category" value="{{.Form.Category}}" list="categories" placeholder="e.g. HVAC, Plumbing, Safety, Audio/Visual">
+      <datalist id="categories">
+        {{range .Categories}}<option value="{{.}}">{{end}}
+        <option value="HVAC"><option value="Plumbing"><option value="Electrical"><option value="Safety"><option value="Audio/Visual"><option value="Kitchen"><option value="Grounds"><option value="Roof"><option value="Instruments">
+      </datalist>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="manufacturer">Manufacturer <span class="optional">optional</span></label>
+        <input id="manufacturer" name="manufacturer" value="{{.Form.Manufacturer}}">
+      </div>
+      <div class="field">
+        <label for="model">Model <span class="optional">optional</span></label>
+        <input id="model" name="model" value="{{.Form.Model}}">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="serial_number">Serial number <span class="optional">optional</span></label>
+        <input id="serial_number" name="serial_number" value="{{.Form.SerialNumber}}">
+      </div>
+      <div class="field">
+        <label for="install_date">Installed <span class="optional">optional</span></label>
+        <input id="install_date" name="install_date" type="date" value="{{.Form.InstallDate}}">
+      </div>
+    </div>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="4" placeholder="Filter size, service company phone, warranty info…">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save item</button>
+      <a class="btn btn--ghost" href="{{if .Form.ID}}/items/{{.Form.ID}}{{else}}/items{{end}}">Cancel</a>
+    </div>
+  </form>
+  {{end}}
+</div>
+{{end}}

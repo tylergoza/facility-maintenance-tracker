@@ -1,0 +1,25 @@
+{{define "content"}}
+<div class="page-head"><div><h1>{{.Title}}</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="{{if .Form.ID}}/buildings/{{.Form.ID}}{{else}}/buildings{{end}}" class="form">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Form.Name}}" required autofocus>
+    </div>
+    <div class="field">
+      <label for="address">Address <span class="optional">optional</span></label>
+      <input id="address" name="address" value="{{.Form.Address}}" autocomplete="street-address">
+    </div>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="4" placeholder="Key holders, water shut-off location, etc.">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save building</button>
+      <a class="btn btn--ghost" href="{{if .Form.ID}}/buildings/{{.Form.ID}}{{else}}/buildings{{end}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

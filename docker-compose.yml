@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: America/Chicago      # your church's time zone: decides what "today" is
+      TRUST_PROXY: "1"         # set when running behind Caddy/nginx/a load balancer
+    volumes:
+      - ./data:/data           # the whole app state is ./data/maintenance.db

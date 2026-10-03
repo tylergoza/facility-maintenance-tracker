@@ -1,0 +1,108 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{.Item.ID}}">{{.Item.Name}}</a> <span class="muted">· {{.Item.Location}}</span></nav>
+<div class="page-head"><div><h1>{{.Title}}</h1></div>
+  {{if .Form.ID}}<div class="page-head__actions">{{template "delete-button" (dict "Action" (printf "/tasks/%d/delete" .Form.ID) "CSRF" .CSRF "Label" "Delete task" "Confirm" "Delete this task? Past history entries are kept.")}}</div>{{end}}
+</div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="{{if .Form.ID}}/tasks/{{.Form.ID}}{{else}}/tasks{{end}}" class="form"
+        data-controller="recurrence">
+    {{template "csrf" .CSRF}}
+    <input type="hidden" name="item_id" value="{{.Item.ID}}">
+    <div class="field">
+      <label for="name">Task</label>
+      <input id="name" name="name" value="{{.Form.Name}}" required autofocus placeholder="e.g. Replace air filter, Annual inspection, Tune piano">
+    </div>
+    <div class="field">
+      <label for="description">Instructions <span class="optional">optional</span></label>
+      <textarea id="description" name="description" rows="3" placeholder="Filter size 20x25x1. Vendor: ...">{{.Form.Description}}</textarea>
+    </div>
+
+    <fieldset class="fieldset">
+      <legend>Schedule</legend>
+      <label class="check">
+        <input type="checkbox" name="recurring" value="1" {{if .Form.Recurring}}checked{{end}}
+               data-recurrence-target="toggle" data-action="recurrence#update">
+        Repeats on a schedule
+      </label>
+      <div class="field-row" data-recurrence-target="fields">
+        <div class="field">
+          <label for="interval_value">Every</label>
+          <input id="interval_value" name="interval_value" type="number" min="1" max="1000" inputmode="numeric"
+                 value="{{if .Form.IntervalValue}}{{.Form.IntervalValue}}{{else}}1{{end}}"
+                 data-recurrence-target="value" data-action="recurrence#update">
+        </div>
+        <div class="field">
+          <label for="interval_unit">Unit</label>
+          <select id="interval_unit" name="interval_unit" data-recurrence-target="unit" data-action="recurrence#update">
+            <option value="days" {{if eq .Form.IntervalUnit "days"}}selected{{end}}>Days</option>
+            <option value="weeks" {{if eq .Form.IntervalUnit "weeks"}}selected{{end}}>Weeks</option>
+            <option value="months" {{if eq .Form.IntervalUnit "months"}}selected{{end}}>Months</option>
+            <option value="years" {{if or (eq .Form.IntervalUnit "years") (eq .Form.IntervalUnit "")}}selected{{end}}>Years</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="last_completed_on">Last done <span class="optional">optional</span></label>
+          <input id="last_completed_on" name="last_completed_on" type="date" value="{{.Form.LastCompletedOn}}" max="{{today}}"
+                 data-recurrence-target="last" data-action="recurrence#update">
+        </div>
+        <div class="field">
+          <label for="next_due_on">Next due <span class="optional">optional</span></label>
+          <input id="next_due_on" name="next_due_on" type="date" value="{{.Form.NextDueOn}}" data-recurrence-target="next">
+        </div>
+      </div>
+      <p class="hint" data-recurrence-target="hint">Leave "Next due" blank to calculate it from "Last done" and the repeat interval.</p>
+    </fieldset>
+
+    <fieldset class="fieldset" data-controller="reveal" data-action="change->reveal#update">
+      <legend>Supplies</legend>
+      <label class="check">
+        <input type="checkbox" name="uses_supply" value="1" {{if .Form.SupplyID}}checked{{end}}>
+        Uses a supply each time, e.g. a filter or light bulb
+      </label>
+      <div data-reveal-target="section" data-reveal-when="uses_supply=1">
+        {{if .Supplies}}
+          <div class="field-row">
+            <div class="field">
+              <label for="supply_id">Supply</label>
+              <select id="supply_id" name="supply_id">
+                <option value="">Choose…</option>
+                {{range .Supplies}}<option value="{{.ID}}" {{if eq .ID $.Form.SupplyID}}selected{{end}}>{{.Name}} — {{.Location}} ({{.QuantityLabel}} on hand)</option>{{end}}
+              </select>
+            </div>
+            <div class="field field--narrow">
+              <label for="supply_amount">How many each time</label>
+              <input id="supply_amount" name="supply_amount" type="number" min="1" step="1" inputmode="numeric" value="{{or .Form.SupplyAmount 1}}">
+            </div>
+          </div>
+          <div class="field">
+            <span class="label">Is it used up every time?</span>
+            <label class="check"><input type="radio" name="supply_always" value="1" {{if or .Form.SupplyAlways (not .Form.SupplyID)}}checked{{end}}>
+              Every time, e.g. "Replace filter"</label>
+            <label class="check"><input type="radio" name="supply_always" value="0" {{if and .Form.SupplyID (not .Form.SupplyAlways)}}checked{{end}}>
+              Only when needed, e.g. "Check filter": I'll say when I replaced it</label>
+          </div>
+          <p class="hint">Either way the task shows which supply to grab and how many are on hand. When it's marked done you can take it out of the supply's count.</p>
+        {{else}}
+          <p class="hint">No supplies yet. <a href="/supplies/new?building={{.Item.BuildingID}}">Add the supply</a> first, then come back and pick it here.</p>
+        {{end}}
+      </div>
+    </fieldset>
+
+    {{if .Form.ID}}
+      <input type="hidden" name="has_active" value="1">
+      <label class="check">
+        <input type="checkbox" name="active" value="1" {{if .Form.Active}}checked{{end}}>
+        Active (shown on the dashboard)
+      </label>
+    {{end}}
+
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save task</button>
+      <a class="btn btn--ghost" href="/items/{{.Item.ID}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

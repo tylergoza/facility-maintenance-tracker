@@ -1,0 +1,25 @@
+# systemd unit for running the binary directly (no Docker).
+#   sudo useradd --system --home /var/lib/maintenance-tracker maintenance
+#   sudo install -m 755 bin/maintenance-tracker-linux-amd64 /usr/local/bin/maintenance-tracker
+#   sudo cp deploy/maintenance-tracker.service /etc/systemd/system/
+#   sudo systemctl enable --now maintenance-tracker
+[Unit]
+Description=Church Maintenance Tracker
+After=network.target
+
+[Service]
+User=maintenance
+StateDirectory=maintenance-tracker
+Environment=ADDR=127.0.0.1:8080
+Environment=DB_PATH=/var/lib/maintenance-tracker/maintenance.db
+Environment=TZ=America/Chicago
+Environment=TRUST_PROXY=1
+ExecStart=/usr/local/bin/maintenance-tracker
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

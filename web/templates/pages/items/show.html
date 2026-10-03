@@ -1,0 +1,84 @@
+{{define "content"}}
+{{$i := .Item}}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="/buildings/{{$i.BuildingID}}">{{$i.BuildingName}}</a>{{if $i.RoomID}} › <a href="/rooms/{{$i.RoomID}}">{{roomLabel $i.RoomNumber $i.RoomName}}</a>{{end}}
+</nav>
+<div class="page-head">
+  <div>
+    <h1>{{$i.Name}}</h1>
+    <p class="muted">{{if $i.Category}}{{$i.Category}} · {{end}}{{$i.Location}}</p>
+  </div>
+  <div class="page-head__actions">
+    <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/edit">Edit</a>
+    {{template "delete-button" (dict "Action" (printf "/items/%d/delete" $i.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s and all of its tasks and history?" $i.Name))}}
+  </div>
+</div>
+
+{{if or $i.Manufacturer $i.Model $i.SerialNumber $i.InstallDate $i.Notes}}
+<div class="card">
+  <dl class="details">
+    {{if $i.Manufacturer}}<div><dt>Manufacturer</dt><dd>{{$i.Manufacturer}}</dd></div>{{end}}
+    {{if $i.Model}}<div><dt>Model</dt><dd>{{$i.Model}}</dd></div>{{end}}
+    {{if $i.SerialNumber}}<div><dt>Serial</dt><dd><code>{{$i.SerialNumber}}</code></dd></div>{{end}}
+    {{if $i.InstallDate}}<div><dt>Installed</dt><dd>{{fmtDate $i.InstallDate}} <span class="muted">({{relDays $i.InstallDate}})</span></dd></div>{{end}}
+  </dl>
+  {{if $i.Notes}}<div class="notes">{{range lines $i.Notes}}<p>{{.}}</p>{{end}}</div>{{end}}
+</div>
+{{end}}
+
+{{if .SuppliesUsed}}
+<section class="section">
+  <h2 class="section__title">Supplies it uses</h2>
+  <ul class="plain-list">
+    {{range .SuppliesUsed}}
+      <li>
+        <a href="/supplies/{{.SupplyID}}"><strong>{{.Supply.Name}}</strong></a> ·
+        {{.Supply.QuantityLabel}} on hand {{template "stock-badge" .Supply}}
+        <span class="muted small">{{.Supply.Location}} · {{.SupplyAmount}} per "{{.Name}}"{{if not .SupplyAlways}} when needed{{end}}</span>
+      </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Maintenance tasks <span class="count">{{len .Tasks}}</span></h2>
+    <a class="btn btn--primary btn--sm" href="/tasks/new?item={{$i.ID}}">Add task</a>
+  </div>
+  {{if .Tasks}}
+    <div class="task-list">
+      {{range .Tasks}}
+        <div class="task-row">
+          {{template "task-card" (dict "Task" . "User" $.User "Next" $.URI)}}
+          <div class="task-row__tools">
+            <a class="btn btn--ghost btn--sm" href="/tasks/{{.ID}}/edit">Edit task</a>
+          </div>
+        </div>
+      {{end}}
+    </div>
+  {{else}}
+    <p class="muted">No scheduled maintenance. Add a task such as "Replace filter" every 3 months.</p>
+  {{end}}
+  {{if .DoneTasks}}
+    <details class="section">
+      <summary>Completed one-time tasks ({{len .DoneTasks}})</summary>
+      <ul class="plain-list">
+        {{range .DoneTasks}}<li><a href="/tasks/{{.ID}}/edit">{{.Name}}</a> <span class="muted small">done {{fmtDate .LastCompletedOn}}</span></li>{{end}}
+      </ul>
+    </details>
+  {{end}}
+</section>
+
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">History <span class="count">{{len .Logs}}</span></h2>
+    <a class="btn btn--sm" href="/items/{{$i.ID}}/log">Log other work</a>
+  </div>
+  {{if .Logs}}
+    {{template "log-table" (dict "Logs" .Logs "ShowItem" false "CSRF" .CSRF)}}
+  {{else}}
+    <p class="muted">No maintenance recorded yet.</p>
+  {{end}}
+</section>
+{{end}}

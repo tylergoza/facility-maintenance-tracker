@@ -1,0 +1,95 @@
+{{define "content"}}
+<div data-controller="task-filter">
+  <div class="page-head">
+    <div>
+      <h1>{{if .Selected}}{{.Selected.Name}}{{else}}Maintenance dashboard{{end}}</h1>
+      <p class="muted">"Due soon" means within {{.DueSoonDays}} days · Updated {{.Updated}}</p>
+    </div>
+    {{if .Buildings}}
+      <form method="get" action="/" class="page-head__filter" data-controller="autosubmit">
+        <label class="sr-only" for="building-filter">Building</label>
+        <select id="building-filter" name="building" data-action="autosubmit#submit">
+          <option value="">All buildings</option>
+          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+        <noscript><button class="btn btn--sm">Go</button></noscript>
+      </form>
+    {{end}}
+  </div>
+
+  {{if eq .Tasks.Total 0}}
+    {{template "low-supplies" .}}
+    <div class="empty">
+      <h2>Nothing scheduled yet</h2>
+      {{if .User}}
+        <p>Add a building, rooms and items, then give each item a maintenance task.</p>
+        <p><a class="btn btn--primary" href="/buildings">Go to buildings</a></p>
+      {{else}}
+        <p>No maintenance tasks have been set up{{if .Selected}} for this building{{end}}.</p>
+      {{end}}
+    </div>
+  {{else}}
+    {{template "status-tiles" .Tasks}}
+
+    {{if .Health}}
+      <section class="section" aria-labelledby="by-building">
+        <h2 id="by-building" class="section__title">By building</h2>
+        <div class="health-grid">
+          {{range .Health}}
+            <a class="health-card health-card--{{.Worst}}" href="/?building={{.ID}}">
+              <strong>{{.Name}}</strong>
+              <span class="health-card__counts">
+                {{if .Overdue}}<span class="badge badge--overdue">{{.Overdue}} overdue</span>{{end}}
+                {{if .DueSoon}}<span class="badge badge--due-soon">{{.DueSoon}} due soon</span>{{end}}
+                {{if and (not .Overdue) (not .DueSoon)}}<span class="muted">{{if .Total}}All caught up{{else}}No tasks{{end}}</span>{{end}}
+              </span>
+            </a>
+          {{end}}
+        </div>
+      </section>
+    {{end}}
+
+    {{template "low-supplies" .}}
+
+    <div class="toolbar">
+      <label class="sr-only" for="task-search">Search tasks</label>
+      <input id="task-search" type="search" placeholder="Search tasks, items, rooms…" autocomplete="off"
+             data-task-filter-target="query" data-action="input->task-filter#filter">
+      <button type="button" class="btn btn--ghost btn--sm" hidden data-task-filter-target="clear" data-action="task-filter#clear">Clear filters</button>
+    </div>
+
+    {{range .Tasks.Groups}}
+      {{if .Tasks}}
+        <section class="section task-group" data-task-filter-target="group" data-status="{{.Status}}"
+                 aria-labelledby="group-{{.Status}}">
+          <h2 id="group-{{.Status}}" class="section__title">
+            {{.Status.Label}} <span class="count">{{len .Tasks}}</span>
+          </h2>
+          <div class="task-list">
+            {{range .Tasks}}{{template "task-card" (dict "Task" . "User" $.User "Next" $.URI)}}{{end}}
+          </div>
+        </section>
+      {{end}}
+    {{end}}
+    <p class="empty empty--inline" hidden data-task-filter-target="none">No tasks match your filters.</p>
+  {{end}}
+</div>
+{{end}}
+
+{{define "low-supplies"}}
+  {{if .LowSupplies}}
+    <section class="section" aria-labelledby="low-supplies">
+      <div class="section__head">
+        <h2 id="low-supplies" class="section__title">Supplies to restock <span class="count">{{len .LowSupplies}}</span></h2>
+        {{if .User}}<a class="btn btn--ghost btn--sm" href="/supplies?low=1{{if .BuildingID}}&amp;building={{.BuildingID}}{{end}}">All supplies</a>{{end}}
+      </div>
+      {{if .User}}
+        {{template "supply-table" (dict "Supplies" .LowSupplies "ShowLocation" true "CSRF" .CSRF "Next" .URI)}}
+      {{else}}
+        <ul class="plain-list">
+          {{range .LowSupplies}}<li><strong>{{.Name}}</strong> · {{.StockSummary}} {{template "stock-badge" .}} <span class="muted small">{{.Location}}</span></li>{{end}}
+        </ul>
+      {{end}}
+    </section>
+  {{end}}
+{{end}}

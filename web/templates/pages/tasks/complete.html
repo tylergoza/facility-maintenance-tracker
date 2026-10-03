@@ -1,0 +1,74 @@
+{{define "content"}}
+{{$t := .Task}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{$t.ItemID}}">{{$t.ItemName}}</a> <span class="muted">· {{$t.Location}}</span></nav>
+<div class="page-head">
+  <div>
+    <h1>{{$t.Name}}</h1>
+    <p class="muted">
+      {{template "status-badge" (status $t.NextDueOn)}}
+      {{if $t.NextDueOn}}Due {{fmtDate $t.NextDueOn}} ({{relDays $t.NextDueOn}}){{end}} · {{$t.IntervalLabel}}
+    </p>
+  </div>
+</div>
+<div class="card narrow">
+  {{if $t.Description}}<div class="notes">{{range lines $t.Description}}<p>{{.}}</p>{{end}}</div>{{end}}
+  {{template "errors" .Errors}}
+  <form method="post" action="/tasks/{{$t.ID}}/complete" class="form"
+        data-controller="next-due"
+        data-next-due-interval-value-value="{{$t.IntervalValue}}"
+        data-next-due-interval-unit-value="{{$t.IntervalUnit}}"
+        data-next-due-last-value="{{$t.LastCompletedOn}}">
+    {{template "csrf" .CSRF}}
+    <input type="hidden" name="next" value="{{.Next}}">
+    <div class="field-row">
+      <div class="field">
+        <label for="performed_on">Date done</label>
+        <input id="performed_on" name="performed_on" type="date" value="{{.Form.PerformedOn}}" max="{{today}}" required
+               data-next-due-target="performed" data-action="next-due#update">
+      </div>
+      <div class="field">
+        <label for="performed_by">Done by</label>
+        <input id="performed_by" name="performed_by" value="{{.Form.PerformedBy}}" placeholder="Name or company">
+      </div>
+    </div>
+    {{if $t.SupplyID}}
+      <fieldset class="fieldset" data-controller="reveal" data-action="change->reveal#update">
+        <legend>Supplies</legend>
+        <p class="small">
+          {{if $t.SupplyAlways}}Uses{{else}}When needed, uses{{end}} {{$t.SupplyAmount}} × <a href="/supplies/{{$t.SupplyID}}">{{$t.Supply.Name}}</a> ·
+          {{$t.Supply.QuantityLabel}} on hand {{template "stock-badge" $t.Supply}}
+          <span class="muted">({{$t.Supply.Location}})</span>
+        </p>
+        <label class="check">
+          <input type="checkbox" name="took_supply" value="1" {{if .Form.SupplyID}}checked{{end}}>
+          {{if $t.SupplyAlways}}Took it from supplies{{else}}Replaced it this time: took it from supplies{{end}}
+        </label>
+        <div class="field field--narrow" data-reveal-target="section" data-reveal-when="took_supply=1">
+          <label for="supply_amount">How many</label>
+          <input id="supply_amount" name="supply_amount" type="number" min="1" step="1" inputmode="numeric" value="{{or .Form.SupplyAmount $t.SupplyAmount}}">
+        </div>
+        {{if $t.SupplyShort}}<p class="hint">Not enough on hand. Leave this unticked if it came from somewhere else, or <a href="/supplies/{{$t.SupplyID}}">restock it</a> first.</p>{{end}}
+      </fieldset>
+    {{end}}
+    <div class="field">
+      <label for="cost">Cost <span class="optional">optional</span></label>
+      <input id="cost" name="cost" inputmode="decimal" placeholder="0.00" value="{{with .Form.CostCents}}{{printf "%.2f" (divf .)}}{{end}}">
+    </div>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="3" placeholder="What was done, parts used, anything to watch for next time">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="field">
+      <label for="next_due_on">Next due</label>
+      <input id="next_due_on" name="next_due_on" type="date" value="{{.Form.NextDueOn}}" data-next-due-target="next">
+      <p class="hint" data-next-due-target="hint">
+        {{if $t.Recurring}}Leave blank to schedule automatically ({{$t.IntervalLabel}} from the date done).{{else}}This is a one-time task; it will be marked complete unless you set a new due date.{{end}}
+      </p>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn btn--ghost" href="{{if .Next}}{{.Next}}{{else}}/items/{{$t.ItemID}}{{end}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

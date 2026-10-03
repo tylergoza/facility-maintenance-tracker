@@ -1,0 +1,73 @@
+{{define "content"}}
+<div class="page-head"><div><h1>{{.Title}}</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  {{if not .Buildings}}
+    <p>You need to <a href="/buildings/new">add a building</a> before adding supplies.</p>
+  {{else}}
+  <form method="post" action="{{if .Form.ID}}/supplies/{{.Form.ID}}{{else}}/supplies{{end}}" class="form"
+        data-controller="room-select reveal" data-action="change->reveal#update">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Form.Name}}" required autofocus placeholder="e.g. Paper towels, AA batteries, 20x25 furnace filter">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="building_id">Building</label>
+        <select id="building_id" name="building_id" required data-room-select-target="building" data-action="room-select#filter">
+          <option value="">Choose…</option>
+          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Form.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="room_id">Room <span class="optional">optional</span></label>
+        <select id="room_id" name="room_id" data-room-select-target="room">
+          <option value="">— Building-wide / no room —</option>
+          {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <label class="check">
+      <input type="checkbox" name="reusable" value="1" {{if .Form.Reusable}}checked{{end}}>
+      Reusable: washed and reused, like mop heads, rags or towels
+    </label>
+    {{if not .Form.ID}}
+      <div class="field-row">
+        <div class="field">
+          <label for="quantity">On hand now <span class="optional" data-reveal-target="section" data-reveal-when="reusable=1">clean</span></label>
+          <input id="quantity" name="quantity" type="number" min="0" step="1" inputmode="numeric" value="{{.Form.Quantity}}" required>
+        </div>
+        <div class="field" data-reveal-target="section" data-reveal-when="reusable=1">
+          <label for="in_use">In use now <span class="optional">optional</span></label>
+          <input id="in_use" name="in_use" type="number" min="0" step="1" inputmode="numeric" value="{{if .Form.InUse}}{{.Form.InUse}}{{end}}">
+        </div>
+        <div class="field" data-reveal-target="section" data-reveal-when="reusable=1">
+          <label for="cleaning">Out for cleaning <span class="optional">optional</span></label>
+          <input id="cleaning" name="cleaning" type="number" min="0" step="1" inputmode="numeric" value="{{if .Form.Cleaning}}{{.Form.Cleaning}}{{end}}">
+        </div>
+      </div>
+    {{end}}
+    <div class="field-row">
+      <div class="field">
+        <label for="unit">Unit <span class="optional">optional</span></label>
+        <input id="unit" name="unit" value="{{.Form.Unit}}" placeholder="e.g. rolls, boxes, bulbs">
+      </div>
+      <div class="field">
+        <label for="reorder_at">Low at <span class="optional">optional</span></label>
+        <input id="reorder_at" name="reorder_at" type="number" min="0" step="1" inputmode="numeric" value="{{if .Form.ReorderAt}}{{.Form.ReorderAt}}{{end}}">
+      </div>
+    </div>
+    <p class="hint">Flagged as low when the count (for reusables, the clean ones on hand) drops to the "Low at" number or below. Leave blank to flag only when it runs out.{{if .Form.ID}} To change the count, use Used / Restocked / Set count on the supply's page.{{end}}</p>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="3" placeholder="Where to buy, part number, shelf location…">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save supply</button>
+      <a class="btn btn--ghost" href="{{if .Form.ID}}/supplies/{{.Form.ID}}{{else if .Form.RoomID}}/rooms/{{.Form.RoomID}}{{else}}/supplies{{end}}">Cancel</a>
+    </div>
+  </form>
+  {{end}}
+</div>
+{{end}}

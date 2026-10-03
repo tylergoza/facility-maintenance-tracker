@@ -1,0 +1,24 @@
+{{define "content"}}
+<div class="page-head">
+  <div><h1>Items</h1><p class="muted">Everything being tracked, across all buildings.</p></div>
+  <a class="btn btn--primary" href="/items/new{{if .Filter.BuildingID}}?building={{.Filter.BuildingID}}{{end}}">Add item</a>
+</div>
+<form method="get" action="/items" class="toolbar" data-controller="autosubmit">
+  <label class="sr-only" for="q">Search</label>
+  <input id="q" type="search" name="q" value="{{.Filter.Query}}" placeholder="Search name, category, model, serial…"
+         data-action="input->autosubmit#debounced">
+  <label class="sr-only" for="building">Building</label>
+  <select id="building" name="building" data-action="autosubmit#submit">
+    <option value="">All buildings</option>
+    {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Filter.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  <noscript><button class="btn btn--sm">Filter</button></noscript>
+</form>
+{{if .Items}}
+  {{template "item-table" (dict "Items" .Items "ShowLocation" true)}}
+{{else}}
+  <div class="empty">
+    {{if or .Filter.Query .Filter.BuildingID}}<p>No items match.</p>{{else}}<h2>No items yet</h2><p>Add things you maintain: furnaces, water heaters, fire extinguishers, pianos, sound boards…</p>{{end}}
+  </div>
+{{end}}
+{{end}}

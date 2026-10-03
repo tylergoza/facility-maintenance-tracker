@@ -1,0 +1,13 @@
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1>History</h1>
+    <p class="muted">The 200 most recent maintenance records across all buildings.</p>
+  </div>
+</div>
+{{if .Logs}}
+  {{template "log-table" (dict "Logs" .Logs "ShowItem" true "CSRF" .CSRF)}}
+{{else}}
+  <div class="empty"><p>No maintenance has been recorded yet.</p></div>
+{{end}}
+{{end}}

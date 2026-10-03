@@ -1,0 +1,211 @@
+{{/* Status pill. Pass a store.Status. */}}
+{{define "status-badge"}}<span class="badge badge--{{.}}">{{.Label}}</span>{{end}}
+
+{{/* Form error list. Pass .Errors ([]string). */}}
+{{define "errors"}}
+  {{if .}}
+    <div class="alert alert--error" role="alert">
+      <strong>Please fix the following:</strong>
+      <ul>{{range .}}<li>{{.}}</li>{{end}}</ul>
+    </div>
+  {{end}}
+{{end}}
+
+{{define "csrf"}}<input type="hidden" name="_csrf" value="{{.}}">{{end}}
+
+{{/* Delete button with confirmation. dict "Action" url "CSRF" token "Label" text "Confirm" message */}}
+{{define "delete-button"}}
+  <form method="post" action="{{.Action}}" class="inline-form"
+        data-controller="confirm" data-confirm-message-value="{{.Confirm}}" data-action="submit->confirm#check">
+    {{template "csrf" .CSRF}}
+    <button type="submit" class="btn btn--danger-ghost btn--sm">{{.Label}}</button>
+  </form>
+{{end}}
+
+{{/*
+  One task on the dashboard / building page.
+  dict "Task" store.Task "User" *User "Next" returnURL "ShowItem" bool
+*/}}
+{{define "task-card"}}
+  {{$t := .Task}}{{$st := status $t.NextDueOn}}
+  <article class="task-card task-card--{{$st}}" data-task-filter-target="card"
+           data-status="{{$st}}"
+           data-search="{{$t.Name}} {{$t.ItemName}} {{$t.ItemCategory}} {{$t.BuildingName}} {{$t.RoomNumber}} {{$t.RoomName}}">
+    <div class="task-card__main">
+      <div class="task-card__head">
+        <h3 class="task-card__title">{{$t.Name}}</h3>
+        {{template "status-badge" $st}}
+      </div>
+      <p class="task-card__item">
+        {{if .User}}<a href="/items/{{$t.ItemID}}">{{$t.ItemName}}</a>{{else}}{{$t.ItemName}}{{end}}
+        <span class="muted">· {{$t.Location}}</span>
+      </p>
+      {{if $t.SupplyID}}
+        <p class="task-card__supply small">
+          {{if $t.SupplyAlways}}Needs{{else}}May need{{end}} {{$t.SupplyAmount}} × {{if .User}}<a href="/supplies/{{$t.SupplyID}}">{{$t.Supply.Name}}</a>{{else}}{{$t.Supply.Name}}{{end}}
+          · {{$t.Supply.QuantityLabel}} on hand {{template "stock-badge" $t.Supply}}
+        </p>
+      {{end}}
+      <dl class="task-card__meta">
+        <div>
+          <dt>Due</dt>
+          <dd>{{if $t.NextDueOn}}<time datetime="{{$t.NextDueOn}}">{{fmtDate $t.NextDueOn}}</time> <span class="muted">({{relDays $t.NextDueOn}})</span>{{else}}<span class="muted">Not scheduled</span>{{end}}</dd>
+        </div>
+        <div>
+          <dt>Last done</dt>
+          <dd>{{if $t.LastCompletedOn}}{{fmtDate $t.LastCompletedOn}}{{else}}<span class="muted">Never recorded</span>{{end}}</dd>
+        </div>
+        <div>
+          <dt>Repeats</dt>
+          <dd>{{$t.IntervalLabel}}</dd>
+        </div>
+      </dl>
+      {{if $t.Description}}
+        <details class="task-card__details">
+          <summary>Instructions</summary>
+          {{range lines $t.Description}}<p>{{.}}</p>{{end}}
+        </details>
+      {{end}}
+    </div>
+    {{if .User}}
+      <div class="task-card__actions">
+        <a class="btn btn--primary btn--sm" href="/tasks/{{$t.ID}}/complete?next={{.Next}}">Mark done</a>
+      </div>
+    {{end}}
+  </article>
+{{end}}
+
+{{/* Status summary tiles. Pass taskGroups. Tiles double as filter buttons. */}}
+{{define "status-tiles"}}
+  <div class="tiles" role="group" aria-label="Filter by status">
+    {{range .Groups}}
+      <button type="button" class="tile tile--{{.Status}}" data-task-filter-target="tile"
+              data-status="{{.Status}}" data-action="task-filter#toggleStatus" aria-pressed="false">
+        <span class="tile__count">{{len .Tasks}}</span>
+        <span class="tile__label">{{.Status.Label}}</span>
+      </button>
+    {{end}}
+  </div>
+{{end}}
+
+{{/* Maintenance history table. dict "Logs" []Log "ShowItem" bool "CSRF" token */}}
+{{define "log-table"}}
+  <div class="table-wrap">
+    <table class="table table--stack">
+      <thead>
+        <tr>
+          <th>Date</th>
+          {{if .ShowItem}}<th>Item</th>{{end}}
+          <th>Work</th>
+          <th>Done by</th>
+          <th class="num">Cost</th>
+          {{if not .ShowItem}}<th><span class="sr-only">Actions</span></th>{{end}}
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Logs}}
+          <tr>
+            <td data-label="Date"><time datetime="{{.PerformedOn}}">{{fmtDate .PerformedOn}}</time></td>
+            {{if $.ShowItem}}<td data-label="Item"><div><a href="/items/{{.ItemID}}">{{.ItemName}}</a><br><span class="muted small">{{.Location}}</span></div></td>{{end}}
+            <td data-label="Work"><div>
+              {{if .TaskName}}<strong>{{.TaskName}}</strong>{{else}}<strong>Other work</strong>{{end}}
+              {{if .Notes}}<div class="small">{{.Notes}}</div>{{end}}
+              {{if .SupplyUsed}}<div class="muted small">Used {{.SupplyUsed}}</div>{{end}}
+            </div></td>
+            <td data-label="Done by"><div>{{.PerformedBy}}{{if and .CreatedBy (ne .CreatedBy .PerformedBy)}}<div class="muted small">entered by {{.CreatedBy}}</div>{{end}}</div></td>
+            <td data-label="Cost" class="num">{{.Cost}}</td>
+            {{if not $.ShowItem}}
+              <td class="actions">{{template "delete-button" (dict "Action" (printf "/logs/%d/delete" .ID) "CSRF" $.CSRF "Label" "Delete" "Confirm" (or (and .SupplyUsed (printf "Delete this history entry? The %s it used will be put back in stock." .SupplyUsed)) "Delete this history entry?"))}}</td>
+            {{end}}
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+{{end}}
+
+{{/* Items table. dict "Items" []Item "ShowLocation" bool */}}
+{{define "item-table"}}
+  <div class="table-wrap">
+    <table class="table table--stack">
+      <thead>
+        <tr><th>Item</th>{{if .ShowLocation}}<th>Location</th>{{end}}<th>Category</th><th>Next due</th></tr>
+      </thead>
+      <tbody>
+        {{range .Items}}
+          <tr>
+            <td data-label="Item"><div><a href="/items/{{.ID}}"><strong>{{.Name}}</strong></a>{{if .Model}}<div class="muted small">{{.Manufacturer}} {{.Model}}</div>{{end}}</div></td>
+            {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
+            <td data-label="Category">{{.Category}}</td>
+            <td data-label="Next due">
+              {{if .NextDue}}{{template "status-badge" (status .NextDue)}} <span class="small">{{fmtDate .NextDue}}</span>{{else}}<span class="muted small">No tasks scheduled</span>{{end}}
+            </td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+{{end}}
+
+{{/* Stock pill for a store.Supply; nothing when stock is fine. */}}
+{{define "stock-badge"}}
+  {{if eq .Stock "out"}}<span class="badge badge--overdue">Out</span>{{else if eq .Stock "low"}}<span class="badge badge--due-soon">Low</span>{{end}}
+{{end}}
+
+{{/*
+  Quick buttons. Consumables: use one / add one. Reusables: swap one dirty
+  for a clean one / one back from cleaning.
+  dict "Supply" store.Supply "CSRF" token "Next" returnURL
+*/}}
+{{define "supply-stepper"}}
+  {{if .Supply.Reusable}}
+  <div class="stepper">
+    <form method="post" action="/supplies/{{.Supply.ID}}/adjust" class="inline-form">
+      {{template "csrf" .CSRF}}
+      <input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="kind" value="swapped"><input type="hidden" name="amount" value="1">
+      <button type="submit" class="btn btn--sm" {{if not (and .Supply.Quantity .Supply.InUse)}}disabled{{end}}
+              title="Send one dirty {{.Supply.Name}} for cleaning and put a clean one in use">Swap</button>
+    </form>
+    <form method="post" action="/supplies/{{.Supply.ID}}/adjust" class="inline-form">
+      {{template "csrf" .CSRF}}
+      <input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="kind" value="returned"><input type="hidden" name="amount" value="1">
+      <button type="submit" class="btn btn--sm" {{if not .Supply.Cleaning}}disabled{{end}}
+              title="One {{.Supply.Name}} back from cleaning">1 back</button>
+    </form>
+  </div>
+  {{else}}
+  <div class="stepper">
+    <form method="post" action="/supplies/{{.Supply.ID}}/adjust" class="inline-form">
+      {{template "csrf" .CSRF}}
+      <input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="kind" value="used"><input type="hidden" name="amount" value="1">
+      <button type="submit" class="btn btn--sm stepper__btn" {{if not .Supply.Quantity}}disabled{{end}} aria-label="Use one {{.Supply.Name}}">−</button>
+    </form>
+    <form method="post" action="/supplies/{{.Supply.ID}}/adjust" class="inline-form">
+      {{template "csrf" .CSRF}}
+      <input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="kind" value="restocked"><input type="hidden" name="amount" value="1">
+      <button type="submit" class="btn btn--sm stepper__btn" aria-label="Add one {{.Supply.Name}}">+</button>
+    </form>
+  </div>
+  {{end}}
+{{end}}
+
+{{/* Supplies table. dict "Supplies" []Supply "ShowLocation" bool "CSRF" token "Next" returnURL */}}
+{{define "supply-table"}}
+  <div class="table-wrap">
+    <table class="table table--stack">
+      <thead>
+        <tr><th>Supply</th>{{if .ShowLocation}}<th>Location</th>{{end}}<th>On hand</th><th><span class="sr-only">Quick update</span></th></tr>
+      </thead>
+      <tbody>
+        {{range .Supplies}}
+          <tr>
+            <td data-label="Supply"><a href="/supplies/{{.ID}}"><strong>{{.Name}}</strong></a></td>
+            {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
+            <td data-label="On hand"><div><span class="qty">{{.StockSummary}}</span> {{template "stock-badge" .}}</div></td>
+            <td class="actions">{{template "supply-stepper" (dict "Supply" . "CSRF" $.CSRF "Next" $.Next)}}</td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+{{end}}

@@ -1,0 +1,196 @@
+// Command maintenance-tracker runs the church maintenance tracker web app.
+//
+//	maintenance-tracker                       start the web server
+//	maintenance-tracker create-user NAME      create a user (prompts for password)
+//	maintenance-tracker reset-password NAME   set a new password for a user
+//	maintenance-tracker backup FILE           write a consistent copy of the database
+//	maintenance-tracker seed-demo             add sample data to try the app out
+//
+// Configuration comes from environment variables (see README.md).
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+	_ "time/tzdata" // lets TZ work in minimal containers with no zoneinfo
+
+	"golang.org/x/term"
+
+	"github.com/mountainview/maintenance-tracker/internal/server"
+	"github.com/mountainview/maintenance-tracker/internal/store"
+)
+
+func env(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func main() {
+	addr := flag.String("addr", env("ADDR", ":8080"), "listen address (env ADDR)")
+	dbPath := flag.String("db", env("DB_PATH", "data/maintenance.db"), "SQLite database path (env DB_PATH)")
+	dev := flag.Bool("dev", env("DEV", "") == "1", "serve templates/static from ./web and reload on each request (env DEV=1)")
+	trustProxy := flag.Bool("trust-proxy", env("TRUST_PROXY", "") == "1", "trust X-Forwarded-* headers from a reverse proxy (env TRUST_PROXY=1)")
+	flag.Parse()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		logger.Error("open database", "path", *dbPath, "err", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	args := flag.Args()
+	if len(args) > 0 {
+		if err := runCommand(st, args); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	srv, err := server.New(server.Config{Dev: *dev, TrustProxy: *trustProxy}, st, logger)
+	if err != nil {
+		logger.Error("init server", "err", err)
+		os.Exit(1)
+	}
+
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Periodically clear out expired sessions.
+	go func() {
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		for {
+			st.PurgeExpiredSessions()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+
+	go func() {
+		logger.Info("listening", "addr", *addr, "db", *dbPath, "dev", *dev, "tz", time.Local.String())
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server", "err", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	logger.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	httpSrv.Shutdown(shutdownCtx)
+}
+
+func runCommand(st *store.Store, args []string) error {
+	switch args[0] {
+	case "create-user":
+		if len(args) < 2 {
+			return errors.New("usage: create-user USERNAME [--admin]")
+		}
+		admin := len(args) > 2 && args[2] == "--admin"
+		if n, _ := st.CountUsers(); n == 0 {
+			admin = true // the first user is always an admin
+		}
+		pw, err := promptPassword()
+		if err != nil {
+			return err
+		}
+		if _, err := st.CreateUser(args[1], "", pw, admin); err != nil {
+			return err
+		}
+		fmt.Printf("Created user %q (admin: %v)\n", args[1], admin)
+	case "reset-password":
+		if len(args) < 2 {
+			return errors.New("usage: reset-password USERNAME")
+		}
+		var id int64
+		if err := st.DB.QueryRow(`SELECT id FROM users WHERE username = ?`, args[1]).Scan(&id); err != nil {
+			return fmt.Errorf("no user %q", args[1])
+		}
+		pw, err := promptPassword()
+		if err != nil {
+			return err
+		}
+		if err := st.SetPassword(id, pw); err != nil {
+			return err
+		}
+		fmt.Printf("Password updated for %q\n", args[1])
+	case "backup":
+		if len(args) < 2 {
+			return errors.New("usage: backup DEST_FILE")
+		}
+		if _, err := os.Stat(args[1]); err == nil {
+			return fmt.Errorf("%s already exists", args[1])
+		}
+		if err := st.Backup(context.Background(), args[1]); err != nil {
+			return err
+		}
+		fmt.Println("Backup written to", args[1])
+	case "seed-demo":
+		if err := seedDemo(st); err != nil {
+			return err
+		}
+		fmt.Println("Demo buildings, rooms, items and tasks added.")
+	default:
+		return fmt.Errorf("unknown command %q (commands: create-user, reset-password, backup, seed-demo)", args[0])
+	}
+	return nil
+}
+
+func promptPassword() (string, error) {
+	read := func(prompt string) (string, error) {
+		fmt.Fprint(os.Stderr, prompt)
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			b, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr)
+			return string(b), err
+		}
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		return strings.TrimRight(line, "\r\n"), err
+	}
+	pw, err := read("Password: ")
+	if err != nil {
+		return "", err
+	}
+	if len(pw) < 10 {
+		return "", errors.New("password must be at least 10 characters")
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		confirm, err := read("Confirm password: ")
+		if err != nil {
+			return "", err
+		}
+		if confirm != pw {
+			return "", errors.New("passwords do not match")
+		}
+	}
+	return pw, nil
+}
