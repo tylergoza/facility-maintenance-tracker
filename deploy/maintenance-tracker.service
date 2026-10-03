@@ -1,8 +1,12 @@
-# systemd unit for running the binary directly (no Docker).
-#   sudo useradd --system --home /var/lib/maintenance-tracker maintenance
-#   sudo install -m 755 bin/maintenance-tracker-linux-amd64 /usr/local/bin/maintenance-tracker
-#   sudo cp deploy/maintenance-tracker.service /etc/systemd/system/
-#   sudo systemctl enable --now maintenance-tracker
+# systemd unit for running the binary directly (no Docker). Install:
+#   sudo useradd --system --home-dir /var/lib/maintenance-tracker --shell /usr/sbin/nologin maintenance
+#   sudo install -m 755 maintenance-tracker-linux-amd64 /usr/local/bin/maintenance-tracker
+#   sudo cp maintenance-tracker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now maintenance-tracker
+# Edit TZ below first. Run commands as the service user against the same
+# database, flags before the command:
+#   sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db create-user alice --admin
+# Logs: journalctl -u maintenance-tracker -f
 [Unit]
 Description=Facility Maintenance Tracker
 After=network.target
@@ -13,6 +17,8 @@ StateDirectory=maintenance-tracker
 Environment=ADDR=127.0.0.1:8080
 Environment=DB_PATH=/var/lib/maintenance-tracker/maintenance.db
 Environment=TZ=America/Chicago
+# Caddy (deploy/Caddyfile) is in front; it's the only thing that can reach
+# 127.0.0.1:8080, so its X-Forwarded-* headers can be trusted.
 Environment=TRUST_PROXY=1
 ExecStart=/usr/local/bin/maintenance-tracker
 Restart=on-failure

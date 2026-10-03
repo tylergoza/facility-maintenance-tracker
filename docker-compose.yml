@@ -1,11 +1,17 @@
+# First run (the container runs as user 10001, which must own ./data):
+#   mkdir -p data && sudo chown 10001:10001 data
+#   docker compose up -d --build
 services:
   app:
     build: .
+    image: maintenance-tracker
     restart: unless-stopped
     ports:
       - "8080:8080"
+      # Behind a reverse proxy on this machine, publish to it only:
+      # - "127.0.0.1:8080:8080"
     environment:
       TZ: America/Chicago      # your facility's time zone: decides what "today" is
-      TRUST_PROXY: "1"         # set when running behind Caddy/nginx/a load balancer
+      # TRUST_PROXY: "1"       # only when Caddy/nginx is in front; without a proxy, clients could fake their IP
     volumes:
       - ./data:/data           # the whole app state is ./data/maintenance.db

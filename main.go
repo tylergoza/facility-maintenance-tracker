@@ -6,7 +6,8 @@
 //	maintenance-tracker backup FILE           write a consistent copy of the database
 //	maintenance-tracker seed-demo             add sample data to try the app out
 //
-// Configuration comes from environment variables (see README.md).
+// Flags such as -db go before the command. Configuration comes from flags
+// or environment variables (see README.md).
 package main
 
 import (
@@ -46,14 +47,22 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
+	// Check the command before opening the database, so a typo or a
+	// misplaced flag doesn't quietly create an empty database somewhere.
+	args := flag.Args()
+	if err := checkCommand(args); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+
 	st, err := store.Open(*dbPath)
 	if err != nil {
-		logger.Error("open database", "path", *dbPath, "err", err)
+		logger.Error("open database", "path", *dbPath, "err", err,
+			"hint", fmt.Sprintf("make sure the folder exists and user id %d can write to it", os.Getuid()))
 		os.Exit(1)
 	}
 	defer st.Close()
 
-	args := flag.Args()
 	if len(args) > 0 {
 		if err := runCommand(st, args); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -109,12 +118,37 @@ func main() {
 	httpSrv.Shutdown(shutdownCtx)
 }
 
+var commandUsage = map[string]string{
+	"create-user":    "create-user USERNAME [--admin]",
+	"reset-password": "reset-password USERNAME",
+	"backup":         "backup DEST_FILE",
+	"seed-demo":      "seed-demo",
+}
+
+// checkCommand validates a command line before anything touches the
+// database. Flags belong before the command; after it they'd be ignored.
+func checkCommand(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	usage, ok := commandUsage[args[0]]
+	if !ok {
+		return fmt.Errorf("unknown command %q (commands: create-user, reset-password, backup, seed-demo)", args[0])
+	}
+	if args[0] != "seed-demo" && len(args) < 2 {
+		return errors.New("usage: " + usage)
+	}
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") && !(args[0] == "create-user" && a == "--admin") {
+			return fmt.Errorf("%s: flags like %s go before the command, e.g. maintenance-tracker -db /path/to/maintenance.db %s", args[0], a, usage)
+		}
+	}
+	return nil
+}
+
 func runCommand(st *store.Store, args []string) error {
 	switch args[0] {
 	case "create-user":
-		if len(args) < 2 {
-			return errors.New("usage: create-user USERNAME [--admin]")
-		}
 		admin := len(args) > 2 && args[2] == "--admin"
 		if n, _ := st.CountUsers(); n == 0 {
 			admin = true // the first user is always an admin
@@ -128,9 +162,6 @@ func runCommand(st *store.Store, args []string) error {
 		}
 		fmt.Printf("Created user %q (admin: %v)\n", args[1], admin)
 	case "reset-password":
-		if len(args) < 2 {
-			return errors.New("usage: reset-password USERNAME")
-		}
 		var id int64
 		if err := st.DB.QueryRow(`SELECT id FROM users WHERE username = ?`, args[1]).Scan(&id); err != nil {
 			return fmt.Errorf("no user %q", args[1])
@@ -144,9 +175,6 @@ func runCommand(st *store.Store, args []string) error {
 		}
 		fmt.Printf("Password updated for %q\n", args[1])
 	case "backup":
-		if len(args) < 2 {
-			return errors.New("usage: backup DEST_FILE")
-		}
 		if _, err := os.Stat(args[1]); err == nil {
 			return fmt.Errorf("%s already exists", args[1])
 		}

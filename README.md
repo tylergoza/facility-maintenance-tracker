@@ -11,16 +11,20 @@ users make changes. Installable as an app (PWA) on phones and desktops.
 
 ## Quick start
 
+Needs Go 1.27 or newer.
+
 ```sh
 make dev                     # http://127.0.0.1:8080, edits to web/ show on refresh
 ```
 
 The first visit takes you to `/setup` to create the admin account. To try it
-with sample data:
+with sample data (added to `data/maintenance.db`):
 
 ```sh
 go run . seed-demo
 ```
+
+To run in production, see [Deploying](#deploying).
 
 ## Features
 
@@ -59,50 +63,138 @@ with an import map, so there are no CDN calls and it works offline.
 
 ## Configuration
 
+Set with a flag or an environment variable. Flags go **before** any command
+(`maintenance-tracker -db /path/x.db create-user alice`).
+
 | Env var | Flag | Default | |
 |---|---|---|---|
 | `ADDR` | `-addr` | `:8080` | Listen address |
-| `DB_PATH` | `-db` | `data/maintenance.db` | SQLite file (created with migrations applied on start) |
-| `TZ` | | system | Facility time zone: decides what "today"/"overdue" means |
-| `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from Caddy/nginx (needed for secure cookies and real client IPs behind a proxy) |
-| `DEV=1` | `-dev` | off | Load templates/static from disk |
+| `DB_PATH` | `-db` | `data/maintenance.db` | SQLite file, relative to the working directory. Created, with migrations applied, on start; its folder must be writable. |
+| `TZ` | | system | Facility time zone (e.g. `America/Chicago`): decides what "today" and "overdue" mean |
+| `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from a reverse proxy, for secure cookies, HSTS and real client IPs. Only turn on when a proxy is the only way in; otherwise clients can fake their IP. |
+| `DEV=1` | `-dev` | off | Load templates/static from `./web` on disk (development only) |
 
-## CLI
+Everything else is in the app under **Settings** (admins): site name, **site
+address** (the public `https://…` address used in links and QR codes, set it
+when running behind a proxy), the "due soon" window, and whether anyone can
+report problems without signing in.
+
+## Commands
 
 ```sh
-maintenance-tracker create-user alice [--admin]   # prompts for password
+maintenance-tracker create-user alice [--admin]   # prompts for a password (10+ characters)
 maintenance-tracker reset-password alice
-maintenance-tracker backup /path/backup.db        # safe while running
-maintenance-tracker seed-demo
+maintenance-tracker backup /path/backup.db        # safe while the app is running
+maintenance-tracker seed-demo                     # sample buildings, items and tasks
 ```
+
+They use the same database as the server, so pass the same `-db` (or `DB_PATH`)
+and run them as the same user. The Docker and systemd sections below show how.
 
 ## Deploying
 
-The app needs only the binary and the `.db` file. Use HTTPS in production: the
-PWA install prompt and secure cookies require it.
+The app is one binary plus one `.db` file. Use HTTPS in production (secure
+cookies and the PWA install prompt need it): put it behind a reverse proxy such
+as [Caddy](https://caddyserver.com), which gets certificates automatically
+(see `deploy/Caddyfile`).
 
-**Docker (home-lab or droplet):**
+Until the first account exists, `/setup` lets **anyone** create the admin. On a
+server reachable from the internet, create the admin with `create-user` before
+opening it up, or visit `/setup` straight away.
+
+After the first sign-in, open **Settings** and set the **Site address** (e.g.
+`https://maintenance.example.org`) so links and QR codes point to the right
+place.
+
+### Docker
+
+Build the image and start it with Compose. The container runs as user `10001`,
+which must own the data folder:
 
 ```sh
-docker compose up -d --build        # data lives in ./data/maintenance.db
+mkdir -p data && sudo chown 10001:10001 data
+docker compose up -d --build           # http://<host>:8080
+docker compose exec app maintenance-tracker create-user alice --admin
 ```
 
-**Plain binary + systemd** (e.g. a $4–6 Digital Ocean droplet):
+Edit `TZ` in `docker-compose.yml` first. All state is in `./data/maintenance.db`.
+
+Without Compose (after the same `mkdir`/`chown`):
 
 ```sh
-make build-linux                    # or build-linux-arm for a Raspberry Pi
-scp bin/maintenance-tracker-linux-amd64 server:/tmp/
-# then follow the comments in deploy/maintenance-tracker.service
-# and put deploy/Caddyfile in front for automatic HTTPS
+docker build -t maintenance-tracker .
+docker run -d --name maintenance-tracker --restart unless-stopped \
+  -p 8080:8080 -e TZ=America/Chicago -v "$PWD/data:/data" maintenance-tracker
+docker exec -it maintenance-tracker maintenance-tracker create-user alice --admin
 ```
 
-### Moving between home-lab and Digital Ocean
+Inside the container `DB_PATH` is already `/data/maintenance.db`, so commands
+need no `-db`. Keep the app on port 8080 inside the container (the health check
+uses it) and change only the published port.
 
-1. Get a snapshot: **Settings → Download backup**, or `maintenance-tracker backup snap.db`.
-2. On the new host, stop the app, copy the file to `DB_PATH`, start the app.
+Behind Caddy or nginx on the same machine, publish only to it
+(`"127.0.0.1:8080:8080"`) and set `TRUST_PROXY: "1"`; both are commented in
+`docker-compose.yml`.
+
+| Task | Command |
+|---|---|
+| Logs | `docker compose logs -f` |
+| Backup | **Settings → Download backup**, or `docker compose exec app maintenance-tracker backup /data/backup.db` (lands in `./data`) |
+| Upgrade | `git pull && docker compose up -d --build` (migrations run on start) |
+
+### Binary + systemd
+
+For a Linux server or droplet without Docker. Build on your machine, copy the
+binary and the files in `deploy/` over, then follow the comments at the top of
+`deploy/maintenance-tracker.service`:
+
+```sh
+make build-linux                       # bin/maintenance-tracker-linux-amd64
+# make build-linux-arm                 # 64-bit ARM, e.g. Raspberry Pi 4/5
+scp bin/maintenance-tracker-linux-amd64 deploy/maintenance-tracker.service deploy/Caddyfile server:
+```
+
+On the server:
+
+```sh
+sudo useradd --system --home-dir /var/lib/maintenance-tracker --shell /usr/sbin/nologin maintenance
+sudo install -m 755 maintenance-tracker-linux-amd64 /usr/local/bin/maintenance-tracker
+sudo cp maintenance-tracker.service /etc/systemd/system/     # edit TZ first
+sudo systemctl daemon-reload && sudo systemctl enable --now maintenance-tracker
+sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db create-user alice --admin
+```
+
+The service listens on `127.0.0.1:8080` only, with `TRUST_PROXY=1`, so install
+Caddy and use `deploy/Caddyfile` (change the domain) to serve it over HTTPS.
+The database lives in `/var/lib/maintenance-tracker/`.
+
+Run commands with `sudo -u maintenance` and the `-db` path above. Running them
+as root leaves files the service can't write to.
+
+| Task | Command |
+|---|---|
+| Logs | `journalctl -u maintenance-tracker -f` |
+| Backup | **Settings → Download backup**, or `sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db backup /var/lib/maintenance-tracker/backup.db` |
+| Upgrade | Copy the new binary, `sudo install` it as above, `sudo systemctl restart maintenance-tracker` (migrations run on start) |
+
+### Binary, run by hand
+
+On any machine with the binary (`make build` builds one for the current OS):
+
+```sh
+./bin/maintenance-tracker              # http://localhost:8080, database in ./data/
+./bin/maintenance-tracker -addr 127.0.0.1:9000 -db /srv/maint/maintenance.db
+```
+
+### Moving between hosts
+
+1. Get a snapshot: **Settings → Download backup**, or the `backup` command.
+2. On the new host, stop the app, copy the file to its database path, start the app.
+   - Docker: copy it to `./data/maintenance.db`, then `sudo chown 10001:10001 data/maintenance.db`.
+   - systemd: copy it to `/var/lib/maintenance-tracker/maintenance.db`, then `sudo chown maintenance: /var/lib/maintenance-tracker/maintenance.db`.
 
 Copying the live `.db` while the app runs can miss data held in the `-wal`
-file. Use the backup command/button, or stop the app first.
+file. Use the backup command or button, or stop the app first.
 
 ## Security notes
 
@@ -128,8 +220,10 @@ deploy/                     systemd unit, Caddyfile
 make test
 ```
 
-These cover the scheduling rules, sessions, CSRF, login rate limiting, and an
-end-to-end flow that renders every page.
+These cover the scheduling rules, sessions, CSRF, login rate limiting,
+supplies, counted items and units, moves, problem reports (including public
+reporting and its rate limit), site address and QR codes, and an end-to-end flow
+that renders every page.
 
 ## License
 
