@@ -26,5 +26,7 @@ droplet_name: maintenance-tracker
 # A dedicated deploy key (see the README) instead of your default ssh setup.
 # ssh_private_key_file: ~/.ssh/maintenance_deploy
 # ssh_identity_agent: SSH_AUTH_SOCK   # if ~/.ssh/config sends ssh to another agent
+# Your own keys (e.g. on a YubiKey) for logging in by hand alongside it.
+# ssh_authorized_keys: [~/.ssh/id_ed25519_sk.pub]
 
 # tz: America/Chicago

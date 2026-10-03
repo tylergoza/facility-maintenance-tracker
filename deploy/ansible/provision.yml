@@ -257,6 +257,16 @@
       changed_when: false
       failed_when: cloud_init.rc not in [0, 2]
 
+    - name: Let in the other SSH keys
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        # Type and key only; the trailing comment may differ.
+        regexp: "^{{ (lookup('ansible.builtin.file', item | expanduser).split()[:2]) | join(' ') | regex_escape }}( |$)"
+        line: "{{ lookup('ansible.builtin.file', item | expanduser) | trim }}"
+        create: true
+        mode: "0600"
+      loop: "{{ ssh_authorized_keys }}"
+
     - name: Install updates
       ansible.builtin.apt:
         update_cache: true

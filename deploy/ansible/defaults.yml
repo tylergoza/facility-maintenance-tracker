@@ -39,6 +39,9 @@ ssh_identity_agent: ""
 # Uploaded to your DigitalOcean account if it isn't there yet, and put on the
 # droplet for root when it's created.
 ssh_public_key_file: "{{ (ssh_private_key_file ~ '.pub') if ssh_private_key_file else '~/.ssh/id_ed25519.pub' }}"
+# More public key files to let in as root, e.g. your hardware-token keys when
+# Ansible uses a deploy key. Added on every provision; never removed.
+ssh_authorized_keys: []
 # Who may reach port 22. Narrow this to your own address if it's stable.
 ssh_sources: [0.0.0.0/0, "::/0"]
 

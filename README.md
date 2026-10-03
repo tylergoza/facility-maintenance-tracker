@@ -233,6 +233,10 @@ The keychain flags exist only in macOS's own `ssh-add`, hence the full path
 PATH). After a restart, `/usr/bin/ssh-add --apple-load-keychain` puts the key
 back in the agent without asking for the passphrase.
 
+The droplet only gets the deploy key, so to keep logging in by hand with the
+hardware key, list its public key in `ssh_authorized_keys` in `vars.yml`
+(e.g. `[~/.ssh/id_ed25519_sk.pub]`). `make provision` adds them for root.
+
 To have your own cloud firewalls cover the droplet, list their tags in
 `do_extra_tags` and set `do_firewall: false`. Pass `-e skip_tests=true` to `ansible-playbook` to skip the tests.
 To roll back, check out the earlier commit and `make deploy` it. If its
