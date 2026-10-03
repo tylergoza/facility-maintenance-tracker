@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
@@ -78,9 +77,14 @@ func (s *Server) handleBuildingShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	problems, err := s.store.ListProblems(store.ProblemFilter{BuildingID: b.ID, Status: "active"})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	s.render(w, r, http.StatusOK, "buildings/show", map[string]any{
 		"Title": b.Name, "Building": b, "Rooms": rooms, "Items": items, "Supplies": supplies,
-		"Tasks": s.groupTasks(tasks),
+		"Problems": problems, "Tasks": s.groupTasks(tasks), "ItemGroups": groupItems(items),
 	})
 }
 
@@ -244,7 +248,14 @@ func (s *Server) handleRoomShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "rooms/show", map[string]any{"Title": room.Label(), "Room": room, "Items": items, "Supplies": supplies})
+	problems, err := s.store.ListProblems(store.ProblemFilter{RoomID: room.ID, Status: "active"})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "rooms/show", map[string]any{
+		"Title": room.Label(), "Room": room, "Items": items, "ItemGroups": groupItems(items), "Supplies": supplies, "Problems": problems,
+	})
 }
 
 func (s *Server) handleRoomEdit(w http.ResponseWriter, r *http.Request) {
@@ -284,165 +295,4 @@ func (s *Server) handleRoomDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirect(w, r, fmt.Sprintf("/buildings/%d", room.BuildingID), room.Name+" deleted. Its items and supplies are now listed under the building.")
-}
-
-// Items ------------------------------------------------------------------
-
-func (s *Server) handleItems(w http.ResponseWriter, r *http.Request) {
-	f := store.ItemFilter{BuildingID: queryInt(r, "building"), Query: r.URL.Query().Get("q")}
-	items, err := s.store.ListItems(f)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	buildings, err := s.store.ListBuildings()
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	s.render(w, r, http.StatusOK, "items/index", map[string]any{
-		"Title": "Items", "Items": items, "Buildings": buildings, "Filter": f,
-	})
-}
-
-func (s *Server) itemForm(w http.ResponseWriter, r *http.Request, status int, title string, item store.Item, errs []string) {
-	buildings, err := s.store.ListBuildings()
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	rooms, err := s.store.ListRooms(0)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	cats, _ := s.store.Categories()
-	s.render(w, r, status, "items/form", map[string]any{
-		"Title": title, "Form": item, "Buildings": buildings, "Rooms": rooms, "Categories": cats, "Errors": errs,
-	})
-}
-
-func (s *Server) itemFromForm(r *http.Request, i *store.Item) []string {
-	i.BuildingID, i.RoomID = formInt(r, "building_id"), formInt(r, "room_id")
-	i.Name, i.Category = formStr(r, "name"), formStr(r, "category")
-	i.Manufacturer, i.Model, i.SerialNumber = formStr(r, "manufacturer"), formStr(r, "model"), formStr(r, "serial_number")
-	i.InstallDate, i.Notes = formStr(r, "install_date"), formStr(r, "notes")
-	var errs []string
-	if i.BuildingID == 0 {
-		errs = append(errs, "Choose a building.")
-	}
-	if i.Name == "" {
-		errs = append(errs, "Name is required.")
-	}
-	if i.InstallDate != "" && !validDate(i.InstallDate) {
-		errs = append(errs, "Install date is not a valid date.")
-	}
-	if i.RoomID != 0 {
-		room, err := s.store.GetRoom(i.RoomID)
-		if err != nil || room.BuildingID != i.BuildingID {
-			errs = append(errs, "The selected room is not in the selected building.")
-		}
-	}
-	return errs
-}
-
-func (s *Server) handleItemNew(w http.ResponseWriter, r *http.Request) {
-	item := store.Item{BuildingID: queryInt(r, "building"), RoomID: queryInt(r, "room")}
-	if item.RoomID != 0 {
-		if room, err := s.store.GetRoom(item.RoomID); err == nil {
-			item.BuildingID = room.BuildingID
-		}
-	}
-	s.itemForm(w, r, http.StatusOK, "Add item", item, nil)
-}
-
-func (s *Server) handleItemCreate(w http.ResponseWriter, r *http.Request) {
-	var item store.Item
-	if errs := s.itemFromForm(r, &item); errs != nil {
-		s.itemForm(w, r, http.StatusUnprocessableEntity, "Add item", item, errs)
-		return
-	}
-	if err := s.store.SaveItem(&item); err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	s.redirect(w, r, fmt.Sprintf("/items/%d", item.ID), item.Name+" added. Add a maintenance task to start tracking it.")
-}
-
-func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
-	item, err := s.store.GetItem(pathID(r))
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	tasks, err := s.store.ListTasks(store.TaskFilter{ItemID: item.ID})
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	logs, err := s.store.ListLogs(store.LogFilter{ItemID: item.ID})
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	var active, done []store.Task
-	var supplies []store.Task // one active task per supply used, for the summary
-	seen := map[int64]bool{}
-	for _, t := range tasks {
-		if t.Active {
-			active = append(active, t)
-			if t.SupplyID != 0 && !seen[t.SupplyID] {
-				seen[t.SupplyID] = true
-				supplies = append(supplies, t)
-			}
-		} else {
-			done = append(done, t)
-		}
-	}
-	s.render(w, r, http.StatusOK, "items/show", map[string]any{
-		"Title": item.Name, "Item": item, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies,
-	})
-}
-
-func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
-	item, err := s.store.GetItem(pathID(r))
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	s.itemForm(w, r, http.StatusOK, "Edit "+item.Name, *item, nil)
-}
-
-func (s *Server) handleItemUpdate(w http.ResponseWriter, r *http.Request) {
-	item, err := s.store.GetItem(pathID(r))
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	if errs := s.itemFromForm(r, item); errs != nil {
-		s.itemForm(w, r, http.StatusUnprocessableEntity, "Edit item", *item, errs)
-		return
-	}
-	if err := s.store.SaveItem(item); err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	s.redirect(w, r, "/items/"+strconv.FormatInt(item.ID, 10), "Item updated.")
-}
-
-func (s *Server) handleItemDelete(w http.ResponseWriter, r *http.Request) {
-	item, err := s.store.GetItem(pathID(r))
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	if err := s.store.DeleteItem(item.ID); err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	to := fmt.Sprintf("/buildings/%d", item.BuildingID)
-	if item.RoomID != 0 {
-		to = fmt.Sprintf("/rooms/%d", item.RoomID)
-	}
-	s.redirect(w, r, to, item.Name+" deleted.")
 }

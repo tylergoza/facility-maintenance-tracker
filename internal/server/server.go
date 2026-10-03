@@ -53,18 +53,20 @@ type Server struct {
 	tmplMu sync.Mutex
 	tmpls  map[string]*template.Template
 
-	dueSoonDays atomic.Int64
-	siteName    atomic.Value
+	dueSoonDays   atomic.Int64
+	siteName      atomic.Value
+	publicReports atomic.Bool
 
-	limiter *loginLimiter
-	handler http.Handler
+	limiter       *loginLimiter
+	reportLimiter *loginLimiter // public problem reports per IP
+	handler       http.Handler
 }
 
 func New(cfg Config, st *store.Store, logger *slog.Logger) (*Server, error) {
 	if cfg.SessionTTL == 0 {
 		cfg.SessionTTL = 30 * 24 * time.Hour
 	}
-	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute)}
+	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute), reportLimiter: newLoginLimiter(10, time.Hour)}
 	if cfg.Dev {
 		s.webFS = os.DirFS("web")
 	} else {
@@ -96,10 +98,15 @@ func (s *Server) reloadSettings() {
 	}
 	s.dueSoonDays.Store(int64(days))
 	s.siteName.Store(s.store.Setting("site_name", "Facility Maintenance"))
+	s.publicReports.Store(s.store.Setting("public_reports", "0") == "1")
 }
 
 func (s *Server) SiteName() string { return s.siteName.Load().(string) }
 func (s *Server) DueSoonDays() int { return int(s.dueSoonDays.Load()) }
+
+// PublicReports reports whether anyone may report a problem without
+// signing in.
+func (s *Server) PublicReports() bool { return s.publicReports.Load() }
 
 // computeAssets hashes the static tree and builds the import map. The
 // import map is an inline script, so its hash goes into the CSP.
@@ -164,18 +171,19 @@ func (s *Server) asset(p string) string {
 
 func (s *Server) funcs() template.FuncMap {
 	return template.FuncMap{
-		"asset":     s.asset,
-		"status":    s.status,
-		"relDays":   s.relDays,
-		"fmtDate":   fmtDate,
-		"fmtTime":   fmtTime,
-		"today":     func() string { return s.today() },
-		"dict":      dict,
-		"add":       func(a, b int) int { return a + b },
-		"divf":      func(cents int64) float64 { return float64(cents) / 100 },
-		"pluralize": pluralize,
-		"roomLabel": store.RoomLabel,
-		"lines":     func(t string) []string { return strings.Split(strings.TrimSpace(t), "\n") },
+		"asset":              s.asset,
+		"status":             s.status,
+		"relDays":            s.relDays,
+		"fmtDate":            fmtDate,
+		"fmtTime":            fmtTime,
+		"today":              func() string { return s.today() },
+		"dict":               dict,
+		"add":                func(a, b int) int { return a + b },
+		"divf":               func(cents int64) float64 { return float64(cents) / 100 },
+		"pluralize":          pluralize,
+		"roomLabel":          store.RoomLabel,
+		"problemStatusLabel": store.ProblemStatusLabel,
+		"lines":              func(t string) []string { return strings.Split(strings.TrimSpace(t), "\n") },
 	}
 }
 
@@ -231,6 +239,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 	data["User"] = currentUser(r)
 	data["CSRF"] = csrfToken(r)
 	data["SiteName"] = s.SiteName()
+	data["PublicReports"] = s.PublicReports()
 	data["ImportMap"] = s.importMap
 	data["AssetVersion"] = s.assetVersion
 	data["Path"] = r.URL.Path

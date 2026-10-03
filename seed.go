@@ -69,6 +69,43 @@ func seedDemo(st *store.Store) error {
 		},
 	}
 
+	// Groups of identical things, some using a supply, plus portable gear.
+	type counted struct {
+		name, category, room string
+		quantity             int
+		supply               string
+		per                  int
+		portable             bool
+	}
+	countedItems := map[string][]counted{
+		"Sanctuary": {
+			{"Ceiling pendants", "Lighting", "Worship Hall", 8, "Light bulbs (LED A19)", 1, false},
+			{"Electrical outlets", "Electrical", "Worship Hall", 12, "", 0, false},
+			{"Exit signs", "Safety", "Worship Hall", 2, "", 0, false},
+			{"Ceiling cans", "Lighting", "Nursery", 6, "LED BR30 bulbs", 1, false},
+			{"Electrical outlets", "Electrical", "Nursery", 6, "", 0, false},
+			{"Light switches", "Electrical", "Nursery", 2, "", 0, false},
+			{"Projector", "Audio/Visual", "Sound Booth", 1, "", 0, true},
+		},
+		"Fellowship Hall": {
+			{"Troffers", "Lighting", "Classroom 1", 4, "LED T8 tubes", 2, false},
+			{"Air returns", "HVAC", "Classroom 1", 2, "Air filters 12x20x1", 1, false},
+			{"Portable TV cart", "Audio/Visual", "Classroom 2", 1, "", 0, true},
+		},
+	}
+	// Supplies the items above use that aren't in the supplies list yet.
+	newSupplies := map[string]store.Supply{
+		"LED BR30 bulbs":      {Unit: "bulbs", Quantity: 2, ReorderAt: 1},
+		"LED T8 tubes":        {Unit: "tubes", Quantity: 0, ReorderAt: 2},
+		"Air filters 12x20x1": {Unit: "filters", Quantity: 4, ReorderAt: 2},
+	}
+
+	type problem struct{ title, details, room, reporter string }
+	problems := map[string][]problem{
+		"Sanctuary":       {{"Nursery door won't latch", "Have to pull it hard to close.", "Nursery", "Front desk"}},
+		"Fellowship Hall": {{"Kitchen faucet dripping", "Hot side, constant drip.", "Kitchen", "Kitchen volunteers"}},
+	}
+
 	// Tasks that use a supply each time: task name -> supply name.
 	taskSupplies := map[string]string{
 		"Replace air filter": "Furnace filters 20x25x1",
@@ -99,9 +136,15 @@ func seedDemo(st *store.Store) error {
 			}
 			supplyIDs[sp.name] = supply.ID
 		}
+		for _, pr := range problems[bd.name] {
+			p := &store.Problem{BuildingID: b.ID, RoomID: rooms[pr.room], Title: pr.title, Details: pr.details, ReporterName: pr.reporter}
+			if err := st.CreateProblem(p); err != nil {
+				return err
+			}
+		}
 		for _, it := range bd.items {
 			i := &store.Item{BuildingID: b.ID, RoomID: rooms[it.room], Name: it.name, Category: it.category}
-			if err := st.SaveItem(i); err != nil {
+			if err := st.SaveItem(i, nil, 0); err != nil {
 				return err
 			}
 			for _, tk := range it.tasks {
@@ -122,6 +165,21 @@ func seedDemo(st *store.Store) error {
 						return err
 					}
 				}
+			}
+		}
+		for _, c := range countedItems[bd.name] {
+			i := &store.Item{BuildingID: b.ID, RoomID: rooms[c.room], Name: c.name, Category: c.category, Quantity: c.quantity,
+				SupplyID: supplyIDs[c.supply], SupplyPer: c.per, Portable: c.portable}
+			var sp *store.Supply
+			if def, ok := newSupplies[c.supply]; ok && i.SupplyID == 0 {
+				def.Name = c.supply
+				sp = &def
+			}
+			if err := st.SaveItem(i, sp, 0); err != nil {
+				return err
+			}
+			if sp != nil {
+				supplyIDs[c.supply] = sp.ID
 			}
 		}
 	}

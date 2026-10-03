@@ -27,11 +27,13 @@ go run . seed-demo
 | Area | What it does |
 |------|--------------|
 | Dashboard (`/`, public) | Status tiles (Overdue / Due soon / Upcoming / Not scheduled), per-building health, search and status filters (kept in the URL hash), building filter. Works offline once visited. |
-| Buildings → Rooms → Items | Items belong to a building and optionally a room (roofs, parking lots and HVAC units can be building-wide). Deleting a room keeps its items. |
+| Buildings → Rooms → Items | Items belong to a building and optionally a room (roofs, parking lots and HVAC units can be building-wide). An item can count a group of identical things (10 outlets, 15 lights) and use a supply that gets replaced (1 bulb or filter each); "Replace" records it and takes it from stock. Portable items (projectors, TV carts) have "Move", and every change of location is kept in their history. Room pages group items by category. Deleting a room keeps its items. |
 | Tasks | One-time or recurring (every N days/weeks/months/years). "Next due" is calculated from "last done" or set by hand. Month math clamps (Jan 31 + 1 month = Feb 28). |
 | Mark done | Logs date, who, cost and notes, then rolls the task forward. Back-dated entries never move the schedule backwards. One-time tasks close. |
 | History | Per-item and site-wide maintenance logs, including ad-hoc "other work". |
-| Users | Admins manage users, settings (site name, "due soon" window) and can download a backup. Editors manage data. |
+| Supplies | Counts of things that get used up (paper towels, filters, bulbs) or washed and reused (mop heads), with a history of every change and low-stock flags. Tasks can take a supply each time they're done. |
+| Problems | Report a problem against a building, room or item; mark "I'm on it", assign, add notes, resolve. Only signed-in users can see reports. Admins can let anyone report at `/report` without signing in (off by default, 10 reports an hour per device, with a honeypot field for bots). |
+| Users | Admins manage users, settings (site name, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
 
 ## Stimulus autoloader
 

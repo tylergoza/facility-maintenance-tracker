@@ -108,9 +108,11 @@
             <td data-label="Date"><time datetime="{{.PerformedOn}}">{{fmtDate .PerformedOn}}</time></td>
             {{if $.ShowItem}}<td data-label="Item"><div><a href="/items/{{.ItemID}}">{{.ItemName}}</a><br><span class="muted small">{{.Location}}</span></div></td>{{end}}
             <td data-label="Work"><div>
-              {{if .TaskName}}<strong>{{.TaskName}}</strong>{{else}}<strong>Other work</strong>{{end}}
-              {{if .Notes}}<div class="small">{{.Notes}}</div>{{end}}
-              {{if .SupplyUsed}}<div class="muted small">Used {{.SupplyUsed}}</div>{{end}}
+              {{if eq .Kind "replaced"}}<strong>Replaced {{.Replaced}}{{if .SupplyName}} × {{.SupplyName}}{{end}}</strong>
+              {{else if eq .Kind "moved"}}<strong>Moved</strong>
+              {{else if .TaskName}}<strong>{{.TaskName}}</strong>{{else}}<strong>Other work</strong>{{end}}
+              {{if .Notes}}{{range lines .Notes}}<div class="small">{{.}}</div>{{end}}{{end}}
+              {{if .SupplyUsed}}<div class="muted small">Took {{.SupplyUsed}} from supplies</div>{{else if eq .Kind "replaced"}}<div class="muted small">Not taken from supplies</div>{{end}}
             </div></td>
             <td data-label="Done by"><div>{{.PerformedBy}}{{if and .CreatedBy (ne .CreatedBy .PerformedBy)}}<div class="muted small">entered by {{.CreatedBy}}</div>{{end}}</div></td>
             <td data-label="Cost" class="num">{{.Cost}}</td>
@@ -124,27 +126,64 @@
   </div>
 {{end}}
 
-{{/* Items table. dict "Items" []Item "ShowLocation" bool */}}
+{{/*
+  Items table with quick actions (Replace when it uses a supply, Move when
+  portable). dict "Items" []Item "ShowLocation" bool "ShowCategory" bool "Next" returnURL
+*/}}
 {{define "item-table"}}
   <div class="table-wrap">
     <table class="table table--stack">
-      <thead>
-        <tr><th>Item</th>{{if .ShowLocation}}<th>Location</th>{{end}}<th>Category</th><th>Next due</th></tr>
-      </thead>
-      <tbody>
-        {{range .Items}}
-          <tr>
-            <td data-label="Item"><div><a href="/items/{{.ID}}"><strong>{{.Name}}</strong></a>{{if .Model}}<div class="muted small">{{.Manufacturer}} {{.Model}}</div>{{end}}</div></td>
-            {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
-            <td data-label="Category">{{.Category}}</td>
-            <td data-label="Next due">
-              {{if .NextDue}}{{template "status-badge" (status .NextDue)}} <span class="small">{{fmtDate .NextDue}}</span>{{else}}<span class="muted small">No tasks scheduled</span>{{end}}
-            </td>
-          </tr>
-        {{end}}
-      </tbody>
+      {{template "item-head" .}}
+      <tbody>{{range .Items}}{{template "item-row" (dict "Item" . "ShowLocation" $.ShowLocation "ShowCategory" $.ShowCategory "Next" $.Next)}}{{end}}</tbody>
     </table>
   </div>
+{{end}}
+
+{{/* Items in one table with a heading row per category. dict "Groups" []itemGroup "Next" returnURL */}}
+{{define "item-groups"}}
+  <div class="table-wrap">
+    <table class="table table--stack">
+      {{template "item-head" .}}
+      {{range .Groups}}
+        <tbody>
+          <tr class="table__group"><th colspan="4" scope="rowgroup">{{or .Category "Other"}} <span class="count">{{len .Items}}</span></th></tr>
+          {{range .Items}}{{template "item-row" (dict "Item" . "Next" $.Next)}}{{end}}
+        </tbody>
+      {{end}}
+    </table>
+  </div>
+{{end}}
+
+{{define "item-head"}}
+  <thead>
+    <tr><th>Item</th>{{if .ShowLocation}}<th>Location</th>{{end}}{{if .ShowCategory}}<th>Category</th>{{end}}<th>Uses</th><th>Next due</th><th><span class="sr-only">Actions</span></th></tr>
+  </thead>
+{{end}}
+
+{{define "item-row"}}
+  {{with .Item}}
+  <tr>
+    <td data-label="Item"><div>
+      <a href="/items/{{.ID}}"><strong>{{.Name}}</strong></a>{{if gt .Quantity 1}} <span class="qty">× {{.Quantity}}</span>{{end}}
+      {{if .Portable}}<span class="badge">Portable</span>{{end}}
+      {{if .Model}}<div class="muted small">{{.Manufacturer}} {{.Model}}</div>{{end}}
+    </div></td>
+    {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
+    {{if $.ShowCategory}}<td data-label="Category">{{.Category}}</td>{{end}}
+    <td data-label="Uses">
+      {{if .SupplyID}}<div class="small">{{.SupplyPer}} × <a href="/supplies/{{.SupplyID}}">{{.Supply.Name}}</a> each
+        <div><span class="qty">{{.Supply.Quantity}}</span> on hand {{template "stock-badge" .Supply}}</div>
+        <div class="muted">{{if .LastReplaced}}Last replaced {{fmtDate .LastReplaced}}{{else}}Never replaced{{end}}</div></div>{{end}}
+    </td>
+    <td data-label="Next due">
+      {{if .NextDue}}{{template "status-badge" (status .NextDue)}} <span class="small">{{fmtDate .NextDue}}</span>{{else}}<span class="muted small">No tasks scheduled</span>{{end}}
+    </td>
+    <td class="actions">
+      {{if .SupplyID}}<a class="btn btn--sm" href="/items/{{.ID}}/replace?next={{$.Next}}">Replace</a>{{end}}
+      {{if .Portable}}<a class="btn btn--sm" href="/items/{{.ID}}/move?next={{$.Next}}">Move</a>{{end}}
+    </td>
+  </tr>
+  {{end}}
 {{end}}
 
 {{/* Stock pill for a store.Supply; nothing when stock is fine. */}}
@@ -203,6 +242,31 @@
             {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
             <td data-label="On hand"><div><span class="qty">{{.StockSummary}}</span> {{template "stock-badge" .}}</div></td>
             <td class="actions">{{template "supply-stepper" (dict "Supply" . "CSRF" $.CSRF "Next" $.Next)}}</td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+{{end}}
+
+{{/* Problem status pill. Pass the status string. */}}
+{{define "problem-badge"}}<span class="badge badge--problem-{{.}}">{{problemStatusLabel .}}</span>{{end}}
+
+{{/* Problems table. dict "Problems" []Problem "ShowLocation" bool */}}
+{{define "problem-table"}}
+  <div class="table-wrap">
+    <table class="table table--stack">
+      <thead>
+        <tr><th>Problem</th>{{if .ShowLocation}}<th>Location</th>{{end}}<th>Status</th><th>Reported</th></tr>
+      </thead>
+      <tbody>
+        {{range .Problems}}
+          <tr>
+            <td data-label="Problem"><div><a href="/problems/{{.ID}}"><strong>{{.Title}}</strong></a>{{if .ItemName}}<div class="muted small">{{.ItemName}}</div>{{end}}</div></td>
+            {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
+            <td data-label="Status"><div>{{template "problem-badge" .Status}}
+              <div class="small">{{if .AssignedName}}{{.AssignedName}}{{else if .Active}}<span class="muted">Nobody yet</span>{{end}}</div></div></td>
+            <td data-label="Reported"><div class="small">{{fmtTime .CreatedAt}}{{if .ReporterName}}<div class="muted">by {{.ReporterName}}</div>{{end}}</div></td>
           </tr>
         {{end}}
       </tbody>

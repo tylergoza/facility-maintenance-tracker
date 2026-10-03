@@ -118,6 +118,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	// Reports can name people and contact details, so only signed-in
+	// users see them.
+	var problems []store.Problem
+	if currentUser(r) != nil {
+		if problems, err = s.store.ListProblems(store.ProblemFilter{BuildingID: buildingID, Status: "active"}); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+	}
 	var health []buildingHealth
 	if buildingID == 0 {
 		hm := s.buildingHealth(tasks)
@@ -141,7 +150,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, http.StatusOK, "dashboard", map[string]any{
 		"Title": title, "Buildings": buildings, "Selected": selected, "BuildingID": buildingID,
-		"Tasks": s.groupTasks(tasks), "Health": health, "LowSupplies": lowSupplies, "DueSoonDays": s.DueSoonDays(),
+		"Tasks": s.groupTasks(tasks), "Health": health, "LowSupplies": lowSupplies, "Problems": problems, "DueSoonDays": s.DueSoonDays(),
 		"Updated": time.Now().Format("Mon Jan 2, 3:04 PM"),
 	})
 }
@@ -225,9 +234,12 @@ func (s *Server) taskFromForm(r *http.Request, t *store.Task) []string {
 }
 
 func (s *Server) handleTaskNew(w http.ResponseWriter, r *http.Request) {
-	s.taskForm(w, r, http.StatusOK, "Add maintenance task", store.Task{
-		ItemID: queryInt(r, "item"), Active: true, IntervalValue: 1, IntervalUnit: "years",
-	}, nil)
+	t := store.Task{ItemID: queryInt(r, "item"), Active: true, IntervalValue: 1, IntervalUnit: "years", SupplyAmount: 1, SupplyAlways: true}
+	// Start from the supply the item uses, enough to replace all of them.
+	if item, err := s.store.GetItem(t.ItemID); err == nil && item.SupplyID != 0 {
+		t.SupplyID, t.SupplyAmount = item.SupplyID, item.SupplyTotal()
+	}
+	s.taskForm(w, r, http.StatusOK, "Add maintenance task", t, nil)
 }
 
 func (s *Server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
@@ -431,7 +443,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "settings", map[string]any{
-		"Title": "Settings", "SiteNameValue": s.SiteName(), "DueSoonDays": s.DueSoonDays(), "Counts": counts,
+		"Title": "Settings", "SiteNameValue": s.SiteName(), "DueSoonDays": s.DueSoonDays(), "PublicReportsValue": s.PublicReports(), "Counts": counts,
+		"ReportURL": s.absURL(r, "/report"),
 	})
 }
 
@@ -449,6 +462,7 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		counts, _ := s.store.Counts()
 		s.render(w, r, http.StatusUnprocessableEntity, "settings", map[string]any{
 			"Title": "Settings", "SiteNameValue": name, "DueSoonDays": formStr(r, "due_soon_days"), "Counts": counts, "Errors": errs,
+			"PublicReportsValue": r.PostFormValue("public_reports") == "1", "ReportURL": s.absURL(r, "/report"),
 		})
 		return
 	}
@@ -457,6 +471,14 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SetSetting("due_soon_days", strconv.Itoa(days)); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	public := "0"
+	if r.PostFormValue("public_reports") == "1" {
+		public = "1"
+	}
+	if err := s.store.SetSetting("public_reports", public); err != nil {
 		s.serverError(w, r, err)
 		return
 	}

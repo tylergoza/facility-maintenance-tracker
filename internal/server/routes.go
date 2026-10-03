@@ -35,6 +35,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /setup", s.handleSetupForm)
 	mux.HandleFunc("POST /setup", s.handleSetup)
 
+	// Public when an admin has turned on public reports; otherwise signed-in only.
+	mux.Handle("GET /report", s.reportAccess(s.handleReportForm))
+	mux.Handle("POST /report", s.reportAccess(s.handleReport))
+
 	// Signed-in editors
 	auth := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.requireUser(h)) }
 
@@ -64,6 +68,10 @@ func (s *Server) routes() http.Handler {
 	auth("POST /items/{id}/delete", s.handleItemDelete)
 	auth("GET /items/{id}/log", s.handleLogNew)
 	auth("POST /items/{id}/log", s.handleLogCreate)
+	auth("GET /items/{id}/replace", s.handleReplaceForm)
+	auth("POST /items/{id}/replace", s.handleReplace)
+	auth("GET /items/{id}/move", s.handleMoveForm)
+	auth("POST /items/{id}/move", s.handleMove)
 
 	auth("GET /supplies", s.handleSupplies)
 	auth("GET /supplies/new", s.handleSupplyNew)
@@ -73,6 +81,13 @@ func (s *Server) routes() http.Handler {
 	auth("POST /supplies/{id}", s.handleSupplyUpdate)
 	auth("POST /supplies/{id}/delete", s.handleSupplyDelete)
 	auth("POST /supplies/{id}/adjust", s.handleSupplyAdjust)
+
+	auth("GET /problems", s.handleProblems)
+	auth("GET /problems/{id}", s.handleProblemShow)
+	auth("GET /problems/{id}/edit", s.handleProblemEdit)
+	auth("POST /problems/{id}", s.handleProblemSave)
+	auth("POST /problems/{id}/update", s.handleProblemUpdate)
+	auth("POST /problems/{id}/delete", s.handleProblemDelete)
 
 	auth("GET /tasks/new", s.handleTaskNew)
 	auth("POST /tasks", s.handleTaskCreate)

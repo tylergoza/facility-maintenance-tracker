@@ -95,7 +95,7 @@ func TestRecordMaintenanceRollsTaskForward(t *testing.T) {
 	room := &Room{BuildingID: b.ID, Name: "Boiler room"}
 	must(t, s.SaveRoom(room))
 	item := &Item{BuildingID: b.ID, RoomID: room.ID, Name: "Furnace"}
-	must(t, s.SaveItem(item))
+	must(t, s.SaveItem(item, nil, 0))
 
 	recurring := &Task{ItemID: item.ID, Name: "Filter", IntervalValue: 3, IntervalUnit: "months", NextDueOn: "2026-09-01", Active: true}
 	must(t, s.SaveTask(recurring))
@@ -290,7 +290,7 @@ func TestTaskUsesSupply(t *testing.T) {
 	b := &Building{Name: "Sanctuary"}
 	must(t, s.SaveBuilding(b))
 	item := &Item{BuildingID: b.ID, Name: "Air return"}
-	must(t, s.SaveItem(item))
+	must(t, s.SaveItem(item, nil, 0))
 	filters := &Supply{BuildingID: b.ID, Name: "Filters 20x25x1", Quantity: 3, ReorderAt: 1}
 	must(t, s.SaveSupply(filters, 0))
 	task := &Task{ItemID: item.ID, Name: "Replace filter", IntervalValue: 3, IntervalUnit: "months", Active: true, SupplyID: filters.ID, SupplyAmount: 2}
@@ -339,5 +339,53 @@ func TestTaskUsesSupply(t *testing.T) {
 	must(t, s.DeleteSupply(filters.ID))
 	if got, _ := s.GetTask(task.ID); got.SupplyID != 0 {
 		t.Fatalf("task still linked to deleted supply: %+v", got)
+	}
+}
+
+func TestRoomMoveCarriesProblems(t *testing.T) {
+	s := openTest(t)
+	a, b := &Building{Name: "A"}, &Building{Name: "B"}
+	must(t, s.SaveBuilding(a))
+	must(t, s.SaveBuilding(b))
+	room := &Room{BuildingID: a.ID, Name: "Hall"}
+	must(t, s.SaveRoom(room))
+	p := &Problem{BuildingID: a.ID, RoomID: room.ID, Title: "Flickering"}
+	must(t, s.CreateProblem(p))
+
+	room.BuildingID = b.ID
+	must(t, s.SaveRoom(room))
+	if got, _ := s.GetProblem(p.ID); got.BuildingID != b.ID {
+		t.Errorf("problem stayed in building %d", got.BuildingID)
+	}
+}
+
+func TestMoveItem(t *testing.T) {
+	s := openTest(t)
+	b := &Building{Name: "Main"}
+	must(t, s.SaveBuilding(b))
+	r1, r2 := &Room{BuildingID: b.ID, Number: "104", Name: "Nursery"}, &Room{BuildingID: b.ID, Name: "Gym"}
+	must(t, s.SaveRoom(r1))
+	must(t, s.SaveRoom(r2))
+	item := &Item{BuildingID: b.ID, RoomID: r1.ID, Name: "Projector", Portable: true}
+	must(t, s.SaveItem(item, nil, 0))
+
+	// Moving to where it already is records nothing.
+	must(t, s.MoveItem(Move{ItemID: item.ID, BuildingID: b.ID, RoomID: r1.ID, MovedOn: "2026-01-01"}))
+	must(t, s.MoveItem(Move{ItemID: item.ID, BuildingID: b.ID, RoomID: r2.ID, MovedOn: "2026-01-02", Note: "For the retreat"}))
+	if got, _ := s.GetItem(item.ID); got.RoomID != r2.ID {
+		t.Errorf("item in room %d, want %d", got.RoomID, r2.ID)
+	}
+	logs, err := s.ListLogs(LogFilter{ItemID: item.ID})
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("logs = %+v, %v", logs, err)
+	}
+	if l := logs[0]; l.Kind != "moved" || l.Notes != "Moved from Main › 104 – Nursery to Main › Gym.\nFor the retreat" {
+		t.Errorf("move log = %+v", l)
+	}
+	// A room in another building is refused.
+	other := &Building{Name: "Other"}
+	must(t, s.SaveBuilding(other))
+	if err := s.MoveItem(Move{ItemID: item.ID, BuildingID: other.ID, RoomID: r1.ID, MovedOn: "2026-01-03"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }

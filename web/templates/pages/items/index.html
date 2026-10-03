@@ -15,10 +15,10 @@
   <noscript><button class="btn btn--sm">Filter</button></noscript>
 </form>
 {{if .Items}}
-  {{template "item-table" (dict "Items" .Items "ShowLocation" true)}}
+  {{template "item-table" (dict "Items" .Items "ShowLocation" true "ShowCategory" true "Next" .URI)}}
 {{else}}
   <div class="empty">
-    {{if or .Filter.Query .Filter.BuildingID}}<p>No items match.</p>{{else}}<h2>No items yet</h2><p>Add things you maintain: furnaces, water heaters, fire extinguishers, pianos, sound boards…</p>{{end}}
+    {{if or .Filter.Query .Filter.BuildingID}}<p>No items match.</p>{{else}}<h2>No items yet</h2><p>Add things you maintain or count: furnaces, fire extinguishers, projectors, 10 outlets, 15 lights…</p>{{end}}
   </div>
 {{end}}
 {{end}}

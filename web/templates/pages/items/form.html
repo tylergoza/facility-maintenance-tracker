@@ -6,12 +6,20 @@
     <p>You need to <a href="/buildings/new">add a building</a> before adding items.</p>
   {{else}}
   <form method="post" action="{{if .Form.ID}}/items/{{.Form.ID}}{{else}}/items{{end}}" class="form"
-        data-controller="room-select">
+        data-controller="room-select reveal" data-action="change->reveal#update">
     {{template "csrf" .CSRF}}
-    <div class="field">
-      <label for="name">Name</label>
-      <input id="name" name="name" value="{{.Form.Name}}" required autofocus placeholder="e.g. Furnace #2, Fire extinguisher by kitchen door">
+    <div class="field-row">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" value="{{.Form.Name}}" required autofocus list="item-names" placeholder="e.g. Furnace #2, Lights, Electrical outlets">
+        <datalist id="item-names">{{range .Names}}<option value="{{.}}">{{end}}</datalist>
+      </div>
+      <div class="field field--narrow">
+        <label for="quantity">How many</label>
+        <input id="quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" value="{{.Form.Quantity}}" required>
+      </div>
     </div>
+    <p class="hint">Count identical things together, like 10 outlets or 15 lights. Give something its own item if you want to track it separately.</p>
     <div class="field-row">
       <div class="field">
         <label for="building_id">Building</label>
@@ -28,14 +36,55 @@
         </select>
       </div>
     </div>
+    <label class="check">
+      <input type="checkbox" name="portable" value="1" {{if .Form.Portable}}checked{{end}}>
+      Portable: moves between rooms, like a projector or TV cart
+    </label>
     <div class="field">
       <label for="category">Category <span class="optional">optional</span></label>
       <input id="category" name="category" value="{{.Form.Category}}" list="categories" placeholder="e.g. HVAC, Plumbing, Safety, Audio/Visual">
       <datalist id="categories">
         {{range .Categories}}<option value="{{.}}">{{end}}
-        <option value="HVAC"><option value="Plumbing"><option value="Electrical"><option value="Safety"><option value="Audio/Visual"><option value="Kitchen"><option value="Grounds"><option value="Roof"><option value="Instruments">
+        <option value="HVAC"><option value="Plumbing"><option value="Electrical"><option value="Lighting"><option value="Safety"><option value="Audio/Visual"><option value="Kitchen"><option value="Grounds"><option value="Roof"><option value="Instruments">
       </datalist>
     </div>
+    <fieldset class="fieldset">
+      <legend>Supply it uses</legend>
+      <p class="hint">Something that gets replaced, like bulbs for lights or filters for air returns.</p>
+      <div class="segmented" role="radiogroup" aria-label="Supply it uses">
+        <label><input type="radio" name="supply_source" value="none" {{if eq .Form.SupplySource "none"}}checked{{end}}> None</label>
+        {{if .Supplies}}<label><input type="radio" name="supply_source" value="existing" {{if eq .Form.SupplySource "existing"}}checked{{end}}> From supplies</label>{{end}}
+        <label><input type="radio" name="supply_source" value="new" {{if eq .Form.SupplySource "new"}}checked{{end}}> New supply</label>
+      </div>
+      {{if .Supplies}}
+        <div class="field" data-reveal-target="section" data-reveal-when="supply_source=existing">
+          <label for="supply_id">Supply</label>
+          <select id="supply_id" name="supply_id">
+            <option value="">Choose…</option>
+            {{range .Supplies}}<option value="{{.ID}}" {{if eq .ID $.Form.SupplyID}}selected{{end}}>{{.Name}} · {{.Location}} ({{.QuantityLabel}})</option>{{end}}
+          </select>
+        </div>
+      {{end}}
+      <div class="field-row" data-reveal-target="section" data-reveal-when="supply_source=new">
+        <div class="field">
+          <label for="new_supply_name">Supply name</label>
+          <input id="new_supply_name" name="new_supply_name" value="{{.Form.NewSupplyName}}" placeholder="e.g. LED A19 bulbs, 12x20x1 air filters">
+        </div>
+        <div class="field field--narrow">
+          <label for="new_supply_unit">Unit <span class="optional">optional</span></label>
+          <input id="new_supply_unit" name="new_supply_unit" value="{{.Form.NewSupplyUnit}}" placeholder="bulbs, filters">
+        </div>
+        <div class="field field--narrow">
+          <label for="new_supply_quantity">On hand now</label>
+          <input id="new_supply_quantity" name="new_supply_quantity" type="number" min="0" step="1" inputmode="numeric" value="{{.Form.NewSupplyQty}}">
+        </div>
+      </div>
+      <p class="hint" data-reveal-target="section" data-reveal-when="supply_source=new">Adds it to Supplies in this building so you can track how many are on hand.</p>
+      <div class="field field--narrow" data-reveal-target="section" data-reveal-when="supply_source=existing supply_source=new">
+        <label for="supply_per">How many each one uses</label>
+        <input id="supply_per" name="supply_per" type="number" min="1" step="1" inputmode="numeric" value="{{.Form.SupplyPer}}">
+      </div>
+    </fieldset>
     <div class="field-row">
       <div class="field">
         <label for="manufacturer">Manufacturer <span class="optional">optional</span></label>

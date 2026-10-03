@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -365,5 +366,249 @@ func TestParseMoney(t *testing.T) {
 		if _, ok := parseMoney(bad); ok {
 			t.Errorf("parseMoney(%q) should fail", bad)
 		}
+	}
+}
+
+func TestCountedItems(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
+	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"104"}, "name": {"Nursery"}}, 200)
+	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Gym"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"LED A19"}, "unit": {"bulbs"}, "quantity": {"3"}, "reorder_at": {"1"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"Mop heads"}, "reusable": {"1"}, "quantity": {"2"}}, 200)
+
+	item := func(name, category, quantity string, extra url.Values) url.Values {
+		v := url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {name}, "category": {category}, "quantity": {quantity}, "supply_source": {"none"}}
+		for k, vs := range extra {
+			v[k] = vs
+		}
+		return v
+	}
+
+	// Plain counts: 10 outlets, 3 switches.
+	c.post("/items/new?room=1", "/items", item("Electrical outlets", "Electrical", "10", nil), 200)
+	c.post("/items/new?room=1", "/items", item("Light switches", "Electrical", "3", nil), 200)
+	if it, _ := st.GetItem(2); it.Quantity != 3 || it.SupplyID != 0 {
+		t.Errorf("switches = %+v", it)
+	}
+	// 15 lights using a bulb from supplies.
+	c.post("/items/new?room=1", "/items", item("Lights", "Lighting", "15", url.Values{"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}), 200)
+	if body := c.post("/items/new", "/items", item("Lights", "", "1", url.Values{"supply_source": {"existing"}, "supply_id": {"2"}, "supply_per": {"1"}}), 422); !strings.Contains(body, "reusable") {
+		t.Error("expected reusable supply to be refused")
+	}
+	// 2 air returns using a new filter supply, added to the building.
+	c.post("/items/new?room=1", "/items", item("Air returns", "HVAC", "2", url.Values{"supply_source": {"new"}, "new_supply_name": {"Air filters 12x20x1"},
+		"new_supply_unit": {"filters"}, "new_supply_quantity": {"1"}, "supply_per": {"1"}}), 200)
+	if sp, err := st.GetSupply(3); err != nil || sp.Name != "Air filters 12x20x1" || sp.Unit != "filters" || sp.Quantity != 1 || sp.BuildingID != 1 || sp.RoomID != 0 {
+		t.Fatalf("new filter supply = %+v, %v", sp, err)
+	}
+	if it, _ := st.GetItem(4); it.SupplyID != 3 || it.SupplyTotal() != 2 {
+		t.Errorf("air returns = %+v", it)
+	}
+	// A portable projector, and a blank count meaning 1.
+	c.post("/items/new?room=1", "/items", item("Projector", "Audio/Visual", "", url.Values{"portable": {"1"}}), 200)
+	if it, _ := st.GetItem(5); it.Quantity != 1 || !it.Portable {
+		t.Errorf("projector = %+v", it)
+	}
+	if body := c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "quantity": {"0"}, "supply_source": {"new"}}, 422); !strings.Contains(body, "Name is required") ||
+		!strings.Contains(body, "How many must be 1") || !strings.Contains(body, "name for the new supply") {
+		t.Error("expected name, count and supply validation errors")
+	}
+
+	// The room lists everything grouped by category with quick actions.
+	room := c.get("/rooms/1", 200)
+	for _, want := range []string{"Audio/Visual", "Electrical", "HVAC", "Lighting", "Electrical outlets</strong></a> <span class=\"qty\">× 10", "LED A19", "/items/3/replace", "/items/5/move"} {
+		if !strings.Contains(room, want) {
+			t.Errorf("room page missing %q", want)
+		}
+	}
+	if strings.Index(room, ">Audio/Visual <") > strings.Index(room, ">Lighting <") {
+		t.Error("categories should be in alphabetical order")
+	}
+	if strings.Contains(room, "/items/1/replace") || strings.Contains(room, "/items/1/move") {
+		t.Error("outlets have no supply and aren't portable, so no quick actions")
+	}
+
+	for _, p := range []string{"/items/new", "/items/3", "/items/3/edit", "/items/3/replace", "/items/5/move", "/items", "/buildings/1"} {
+		c.get(p, 200)
+	}
+	if body := c.get("/supplies/1", 200); !strings.Contains(body, "Items that use it") || !strings.Contains(body, "15, 1 each (15 to replace them all)") {
+		t.Error("supply page should list the items that use it")
+	}
+	// New tasks start from the item's supply, enough for all of them.
+	if !strings.Contains(c.get("/tasks/new?item=4", 200), `name="supply_amount" type="number" min="1" step="1" inputmode="numeric" value="2"`) {
+		t.Error("task form should default to the item's supply for all of them")
+	}
+	if body := c.get("/items/1/replace", 200); !strings.Contains(body, "Set the supply") {
+		t.Error("replacing on an item without a supply should send you to set one")
+	}
+	if !strings.Contains(c.get("/items/3/replace", 200), `name="took_supply" value="1" checked`) {
+		t.Error("replace form should pre-tick taking from supplies when enough is on hand")
+	}
+
+	// Replacing takes from supplies and returns to the room.
+	body := c.post("/items/3/replace", "/items/3/replace", url.Values{"performed_on": {"2026-01-10"}, "replaced": {"2"}, "took_supply": {"1"}, "next": {"/rooms/1"}}, 200)
+	if !strings.Contains(body, "Recorded 2 × LED A19 replaced in Lights. 1 bulbs on hand. Time to reorder.") || !strings.Contains(body, "Last replaced Jan 10, 2026") {
+		t.Error("replacing should flash the new count and show the date on the room page")
+	}
+	if body := c.post("/items/3/replace", "/items/3/replace", url.Values{"performed_on": {"2026-01-11"}, "replaced": {"5"}, "took_supply": {"1"}}, 422); !strings.Contains(body, "only 1 on hand") {
+		t.Error("taking more than on hand should explain why")
+	}
+	c.post("/items/3/replace", "/items/3/replace", url.Values{"performed_on": {"2026-01-11"}, "replaced": {"5"}}, 200)
+	c.post("/items/3/replace", "/items/3/replace", url.Values{"performed_on": {"2999-01-01"}, "replaced": {"1"}}, 422)
+	if sp, _ := st.GetSupply(1); sp.Quantity != 1 {
+		t.Errorf("bulbs on hand = %d, want 1", sp.Quantity)
+	}
+	body = c.get("/items/3", 200)
+	for _, want := range []string{"Replaced 2 × LED A19", "Took 2 × LED A19 from supplies", "Replaced 5 × LED A19", "Not taken from supplies", "Jan 11, 2026"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("item history missing %q", want)
+		}
+	}
+	if !strings.Contains(c.get("/supplies/1", 200), "Replaced in Lights, 104 – Nursery") {
+		t.Error("supply history should say which item it went to")
+	}
+	// A task taking the item's own supply counts as replacing it.
+	c.post("/tasks/new?item=4", "/tasks", url.Values{"item_id": {"4"}, "name": {"Check filters"}, "uses_supply": {"1"}, "supply_id": {"3"},
+		"supply_amount": {"2"}, "supply_always": {"0"}, "recurring": {"1"}, "interval_value": {"1"}, "interval_unit": {"months"}}, 200)
+	c.post("/tasks/1/complete", "/tasks/1/complete", url.Values{"performed_on": {"2026-02-01"}, "took_supply": {"1"}, "supply_amount": {"1"}}, 200)
+	if it, _ := st.GetItem(4); it.LastReplaced != "2026-02-01" || it.Supply.Quantity != 0 {
+		t.Errorf("air returns after check = %+v", it)
+	}
+
+	// Deleting a replacement puts back what it took.
+	logs, _ := st.ListLogs(store.LogFilter{ItemID: 3})
+	first := logs[len(logs)-1]
+	c.post("/items/3", fmt.Sprintf("/logs/%d/delete", first.ID), url.Values{}, 200)
+	if sp, _ := st.GetSupply(1); sp.Quantity != 3 {
+		t.Errorf("bulbs on hand after delete = %d, want 3", sp.Quantity)
+	}
+
+	// Moving a portable item records where it went.
+	body = c.post("/items/5/move", "/items/5/move", url.Values{"building_id": {"1"}, "room_id": {"2"}, "moved_on": {"2026-03-01"}, "note": {"Youth night"}, "next": {"/items/5"}}, 200)
+	if !strings.Contains(body, "Projector moved to Main › Gym.") || !strings.Contains(body, "Moved from Main › 104 – Nursery to Main › Gym.") || !strings.Contains(body, "Youth night") {
+		t.Error("move should flash and appear in history")
+	}
+	if body := c.post("/items/5/move", "/items/5/move", url.Values{"building_id": {"1"}, "room_id": {"2"}, "moved_on": {"2026-03-02"}}, 422); !strings.Contains(body, "where it is now") {
+		t.Error("moving to the same place should be refused")
+	}
+	// Changing the room on the edit form is recorded as a move too.
+	c.post("/items/5/edit", "/items/5", item("Projector", "Audio/Visual", "1", url.Values{"room_id": {"1"}, "portable": {"1"}}), 200)
+	if logs, _ := st.ListLogs(store.LogFilter{ItemID: 5}); len(logs) != 2 || logs[0].Kind != "moved" {
+		t.Errorf("edit should record a move: %+v", logs)
+	}
+	if !strings.Contains(c.get("/history", 200), "Moved") {
+		t.Error("site history should include moves")
+	}
+}
+
+func TestProblems(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
+	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"110"}, "name": {"Kitchen"}}, 200)
+	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Sink"}}, 200)
+
+	if !strings.Contains(c.get("/report?item=1", 200), "About: <strong>Sink</strong>") {
+		t.Error("report form should be preset from the item")
+	}
+	body := c.post("/report", "/report", url.Values{"building_id": {"1"}, "room_id": {"1"}, "item_id": {"1"}, "title": {"Faucet dripping"}, "details": {"Hot side"}}, 200)
+	for _, want := range []string{"Problem reported.", "Faucet dripping", "Nobody is on it yet", "by Alex", "Sink"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("problem page missing %q", want)
+		}
+	}
+	for _, p := range []string{"/", "/rooms/1", "/items/1", "/buildings/1", "/problems"} {
+		if !strings.Contains(c.get(p, 200), "Faucet dripping") {
+			t.Errorf("%s should list the open problem", p)
+		}
+	}
+	for _, p := range []string{"/problems/1/edit", "/problems?status=all&building=1&mine=1", "/report?room=1", "/admin/settings"} {
+		c.get(p, 200)
+	}
+
+	// "I'm on it" assigns it to me and starts it.
+	body = c.post("/problems/1", "/problems/1/update", url.Values{"status": {"in_progress"}, "assigned_to": {"1"}}, 200)
+	if !strings.Contains(body, "It&#39;s yours") || !strings.Contains(body, "Alex is on it") || strings.Contains(body, "I&#39;m on it</button>") {
+		t.Error("taking a problem should assign it and hide the button")
+	}
+	if body := c.post("/problems/1", "/problems/1/update", url.Values{"status": {"in_progress"}, "assigned_to": {"1"}}, 200); !strings.Contains(body, "Nothing changed.") {
+		t.Error("an update with no changes should say so")
+	}
+	body = c.post("/problems/1", "/problems/1/update", url.Values{"status": {"resolved"}, "assigned_to": {"1"}, "note": {"Replaced washer"}}, 200)
+	if !strings.Contains(body, "Marked resolved.") || !strings.Contains(body, "Replaced washer") {
+		t.Error("resolving should show in the timeline")
+	}
+	if p, _ := st.GetProblem(1); p.ResolvedAt == "" {
+		t.Error("resolved_at not set")
+	}
+	if strings.Contains(c.get("/problems", 200), "Faucet dripping") || !strings.Contains(c.get("/problems?status=resolved", 200), "Faucet dripping") {
+		t.Error("resolved problems should only be listed when asked for")
+	}
+	// Reopening clears the resolved time; unassigning shows in the timeline.
+	body = c.post("/problems/1", "/problems/1/update", url.Values{"status": {"open"}, "assigned_to": {"0"}}, 200)
+	if p, _ := st.GetProblem(1); p.ResolvedAt != "" || p.AssignedTo != 0 || p.Status != "open" {
+		t.Errorf("reopened problem = %+v", p)
+	}
+	if !strings.Contains(body, "Unassigned") {
+		t.Error("timeline should show unassigning")
+	}
+	c.post("/problems/1", "/problems/1/update", url.Values{"status": {"bogus"}, "assigned_to": {"0"}}, 200)
+	c.post("/problems/1/edit", "/problems/1", url.Values{"building_id": {"1"}, "title": {"Kitchen faucet dripping"}, "reporter_name": {"Alex"}, "unlink_item": {"1"}}, 200)
+	if p, _ := st.GetProblem(1); p.Title != "Kitchen faucet dripping" || p.RoomID != 0 || p.ItemID != 0 {
+		t.Errorf("edited problem = %+v", p)
+	}
+
+	// Public reporting is off by default: visitors are asked to sign in,
+	// and the public dashboard doesn't show reports.
+	c.post("/", "/logout", url.Values{}, 200)
+	if body := c.get("/report", 200); !strings.Contains(body, "Sign in") || strings.Contains(body, "Your name") {
+		t.Error("report page should require sign-in while public reports are off")
+	}
+	if strings.Contains(c.get("/", 200), "Kitchen faucet dripping") {
+		t.Error("public dashboard should not list problems")
+	}
+
+	c.post("/login", "/login", url.Values{"username": {"admin"}, "password": {"a long password"}}, 200)
+	c.post("/admin/settings", "/admin/settings", url.Values{"site_name": {"Main"}, "due_soon_days": {"30"}, "public_reports": {"1"}}, 200)
+	if !strings.Contains(c.get("/admin/settings", 200), `name="public_reports" value="1" checked`) {
+		t.Error("settings should show public reports turned on")
+	}
+	c.post("/", "/logout", url.Values{}, 200)
+
+	body = c.get("/report?room=1", 200)
+	if !strings.Contains(body, "Your name") || !strings.Contains(body, `href="/report"`) {
+		t.Error("visitors should get the report form and a nav link to it")
+	}
+	if body := c.post("/report", "/report", url.Values{"building_id": {"1"}, "title": {"Light out"}}, 422); !strings.Contains(body, "Enter your name") {
+		t.Error("visitors must give their name")
+	}
+	report := url.Values{"building_id": {"1"}, "room_id": {"1"}, "title": {"Light out"}, "reporter_name": {"Pat"}, "reporter_contact": {"555-1234"}, "item_id": {"1"}}
+	if body := c.post("/report", "/report", report, 200); !strings.Contains(body, "Thanks!") {
+		t.Error("visitor report should thank them")
+	}
+	if p, _ := st.GetProblem(2); p.ReporterName != "Pat" || p.ReporterContact != "555-1234" || p.ReportedBy != 0 || p.ItemID != 0 || p.RoomID != 1 {
+		t.Errorf("visitor report = %+v", p)
+	}
+	// Honeypot: looks like it worked, saves nothing.
+	spam := url.Values{"website": {"http://spam.example"}}
+	for k, v := range report {
+		spam[k] = v
+	}
+	c.post("/report", "/report", spam, 200)
+	if ps, _ := st.ListProblems(store.ProblemFilter{}); len(ps) != 2 {
+		t.Errorf("honeypot report was saved: %d problems", len(ps))
+	}
+	// 10 reports an hour per device.
+	for i := 0; i < 9; i++ {
+		c.post("/report", "/report", report, 200)
+	}
+	if body := c.post("/report", "/report", report, 429); !strings.Contains(body, "Too many reports") {
+		t.Error("expected report rate limit")
+	}
+	// Visitors still can't see reports.
+	if body := c.get("/problems/2", 200); !strings.Contains(body, "Sign in") || strings.Contains(body, "555-1234") {
+		t.Error("problem pages must require sign-in")
 	}
 }

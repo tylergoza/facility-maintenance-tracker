@@ -13,6 +13,11 @@
       <input id="due_soon_days" name="due_soon_days" type="number" min="1" max="365" value="{{.DueSoonDays}}" required>
       <p class="hint">Tasks due within this many days are flagged as "Due soon" on the dashboard.</p>
     </div>
+    <label class="check">
+      <input type="checkbox" name="public_reports" value="1" {{if .PublicReportsValue}}checked{{end}}>
+      Let anyone report a problem without signing in
+    </label>
+    <p class="hint">Adds a "Report a problem" link for visitors at <code>{{.ReportURL}}</code>. For a link or QR code that goes straight to one room, add the number from the end of that room's page address, e.g. <code>{{.ReportURL}}?room=12</code> for <code>/rooms/12</code>. Signed-in users can always report problems. Reports are limited to 10 an hour from each device.</p>
     <div class="form__actions"><button type="submit" class="btn btn--primary">Save settings</button></div>
   </form>
 </div>

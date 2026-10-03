@@ -5,18 +5,27 @@
 </nav>
 <div class="page-head">
   <div>
-    <h1>{{$i.Name}}</h1>
-    <p class="muted">{{if $i.Category}}{{$i.Category}} · {{end}}{{$i.Location}}</p>
+    <h1>{{$i.Name}}{{if gt $i.Quantity 1}} <span class="muted">× {{$i.Quantity}}</span>{{end}}</h1>
+    <p class="muted">{{if $i.Category}}{{$i.Category}} · {{end}}{{$i.Location}}{{if $i.Portable}} · <span class="badge">Portable</span>{{end}}</p>
   </div>
   <div class="page-head__actions">
+    {{if $i.SupplyID}}<a class="btn btn--primary btn--sm" href="/items/{{$i.ID}}/replace">Replace</a>{{end}}
+    {{if $i.Portable}}<a class="btn btn--sm" href="/items/{{$i.ID}}/move">Move</a>{{end}}
+    <a class="btn btn--sm" href="/report?item={{$i.ID}}">Report a problem</a>
     <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/edit">Edit</a>
     {{template "delete-button" (dict "Action" (printf "/items/%d/delete" $i.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s and all of its tasks and history?" $i.Name))}}
   </div>
 </div>
 
-{{if or $i.Manufacturer $i.Model $i.SerialNumber $i.InstallDate $i.Notes}}
+{{if or $i.Manufacturer $i.Model $i.SerialNumber $i.InstallDate $i.Notes $i.SupplyID (gt $i.Quantity 1)}}
 <div class="card">
   <dl class="details">
+    {{if gt $i.Quantity 1}}<div><dt>How many</dt><dd>{{$i.Quantity}}</dd></div>{{end}}
+    {{if $i.SupplyID}}
+      <div><dt>Uses</dt><dd>{{$i.SupplyPer}} × <a href="/supplies/{{$i.SupplyID}}">{{$i.Supply.Name}}</a> each{{if gt $i.Quantity 1}}<div class="muted small">{{$i.SupplyTotal}} to replace them all</div>{{end}}</dd></div>
+      <div><dt>On hand</dt><dd>{{$i.Supply.QuantityLabel}} {{template "stock-badge" $i.Supply}}<div class="muted small">{{$i.Supply.Location}}</div></dd></div>
+      <div><dt>Last replaced</dt><dd>{{if $i.LastReplaced}}{{fmtDate $i.LastReplaced}} <span class="muted">({{relDays $i.LastReplaced}})</span>{{else}}<span class="muted">Never recorded</span>{{end}}</dd></div>
+    {{end}}
     {{if $i.Manufacturer}}<div><dt>Manufacturer</dt><dd>{{$i.Manufacturer}}</dd></div>{{end}}
     {{if $i.Model}}<div><dt>Model</dt><dd>{{$i.Model}}</dd></div>{{end}}
     {{if $i.SerialNumber}}<div><dt>Serial</dt><dd><code>{{$i.SerialNumber}}</code></dd></div>{{end}}
@@ -26,9 +35,16 @@
 </div>
 {{end}}
 
+{{if .Problems}}
+<section class="section">
+  <h2 class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>
+  {{template "problem-table" (dict "Problems" .Problems "ShowLocation" false)}}
+</section>
+{{end}}
+
 {{if .SuppliesUsed}}
 <section class="section">
-  <h2 class="section__title">Supplies it uses</h2>
+  <h2 class="section__title">{{if $i.SupplyID}}Other supplies its tasks use{{else}}Supplies it uses{{end}}</h2>
   <ul class="plain-list">
     {{range .SuppliesUsed}}
       <li>

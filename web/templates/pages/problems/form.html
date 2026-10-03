@@ -1,0 +1,51 @@
+{{define "content"}}
+<div class="page-head"><div><h1>{{.Title}}</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="/problems/{{.Form.ID}}" class="form" data-controller="room-select">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="title">What's wrong?</label>
+      <input id="title" name="title" value="{{.Form.Title}}" required maxlength="200">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="building_id">Building</label>
+        <select id="building_id" name="building_id" required data-room-select-target="building" data-action="room-select#filter">
+          <option value="">Choose…</option>
+          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Form.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="room_id">Room <span class="optional">optional</span></label>
+        <select id="room_id" name="room_id" data-room-select-target="room">
+          <option value="">— Not in a room —</option>
+          {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    {{if .Form.ItemID}}
+      <label class="check"><input type="checkbox" name="unlink_item" value="1"> Not about {{.Form.ItemName}} after all</label>
+    {{end}}
+    <div class="field">
+      <label for="details">Details <span class="optional">optional</span></label>
+      <textarea id="details" name="details" rows="4" maxlength="5000">{{.Form.Details}}</textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="reporter_name">Reported by</label>
+        <input id="reporter_name" name="reporter_name" value="{{.Form.ReporterName}}" maxlength="100">
+      </div>
+      <div class="field">
+        <label for="reporter_contact">Their phone or email <span class="optional">optional</span></label>
+        <input id="reporter_contact" name="reporter_contact" value="{{.Form.ReporterContact}}" maxlength="200">
+      </div>
+    </div>
+    <p class="hint">To change the status or who's on it, add an update on the problem's page.</p>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn btn--ghost" href="/problems/{{.Form.ID}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

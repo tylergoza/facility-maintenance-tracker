@@ -1,0 +1,75 @@
+{{define "content"}}
+{{$p := .Problem}}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="/problems">Problems</a> › <a href="/buildings/{{$p.BuildingID}}">{{$p.BuildingName}}</a>{{if $p.RoomID}} › <a href="/rooms/{{$p.RoomID}}">{{roomLabel $p.RoomNumber $p.RoomName}}</a>{{end}}
+</nav>
+<div class="page-head">
+  <div>
+    <h1>{{$p.Title}}</h1>
+    <p class="muted">{{template "problem-badge" $p.Status}} {{if $p.AssignedName}}{{$p.AssignedName}} is on it{{else if $p.Active}}Nobody is on it yet{{end}}</p>
+  </div>
+  <div class="page-head__actions">
+    {{if and $p.Active (or (ne $p.AssignedTo .User.ID) (ne $p.Status "in_progress"))}}
+      <form method="post" action="/problems/{{$p.ID}}/update" class="inline-form">
+        {{template "csrf" .CSRF}}
+        <input type="hidden" name="status" value="in_progress"><input type="hidden" name="assigned_to" value="{{.User.ID}}">
+        <button type="submit" class="btn btn--primary btn--sm">I'm on it</button>
+      </form>
+    {{end}}
+    <a class="btn btn--ghost btn--sm" href="/problems/{{$p.ID}}/edit">Edit</a>
+    {{template "delete-button" (dict "Action" (printf "/problems/%d/delete" $p.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" "Delete this problem and its history?")}}
+  </div>
+</div>
+
+<div class="card">
+  <dl class="details">
+    <div><dt>Where</dt><dd>{{$p.Location}}{{if $p.ItemID}}<div><a href="/items/{{$p.ItemID}}">{{$p.ItemName}}</a></div>{{end}}</dd></div>
+    <div><dt>Reported</dt><dd>{{fmtTime $p.CreatedAt}}{{if $p.ReporterName}}<div>by {{$p.ReporterName}}{{if not $p.ReportedBy}} <span class="muted small">(not signed in)</span>{{end}}</div>{{end}}</dd></div>
+    {{if $p.ReporterContact}}<div><dt>Contact</dt><dd>{{$p.ReporterContact}}</dd></div>{{end}}
+    {{if $p.ResolvedAt}}<div><dt>Resolved</dt><dd>{{fmtTime $p.ResolvedAt}}</dd></div>{{end}}
+  </dl>
+  {{if $p.Details}}<div class="notes">{{range lines $p.Details}}<p>{{.}}</p>{{end}}</div>{{end}}
+</div>
+
+<section class="section">
+  <h2 class="section__title">Updates <span class="count">{{len .Updates}}</span></h2>
+  {{if .Updates}}
+    <ol class="timeline">
+      {{range .Updates}}
+        <li>
+          <div class="small"><strong>{{or .CreatedBy "Someone"}}</strong> <span class="muted">· {{fmtTime .CreatedAt}}</span></div>
+          {{if .Status}}<p class="small">Set status to {{template "problem-badge" .Status}}</p>{{end}}
+          {{if .Assigned}}<p class="small">{{if .AssignedName}}Assigned to <strong>{{.AssignedName}}</strong>{{else}}Unassigned{{end}}</p>{{end}}
+          {{if .Note}}{{range lines .Note}}<p>{{.}}</p>{{end}}{{end}}
+        </li>
+      {{end}}
+    </ol>
+  {{else}}
+    <p class="muted">No updates yet.</p>
+  {{end}}
+</section>
+
+<div class="card narrow section">
+  <form method="post" action="/problems/{{$p.ID}}/update" class="form">
+    {{template "csrf" .CSRF}}
+    <fieldset class="fieldset">
+      <legend>Add an update</legend>
+      <div class="segmented" role="radiogroup" aria-label="Status">
+        {{range .Statuses}}<label><input type="radio" name="status" value="{{.}}" {{if eq . $p.Status}}checked{{end}}> {{problemStatusLabel .}}</label>{{end}}
+      </div>
+      <div class="field">
+        <label for="assigned_to">Who's on it</label>
+        <select id="assigned_to" name="assigned_to">
+          <option value="0">Nobody yet</option>
+          {{range .Users}}<option value="{{.ID}}" {{if eq .ID $p.AssignedTo}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="note">Note <span class="optional">optional</span></label>
+        <textarea id="note" name="note" rows="3" maxlength="5000" placeholder="What you found, parts on order, how it was fixed…"></textarea>
+      </div>
+      <div class="form__actions"><button type="submit" class="btn btn--primary">Save update</button></div>
+    </fieldset>
+  </form>
+</div>
+{{end}}

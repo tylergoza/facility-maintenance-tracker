@@ -287,6 +287,9 @@ type Log struct {
 	ItemName     string
 	TaskID       int64
 	TaskName     string
+	Kind         string // "work", "replaced" or "moved"
+	Replaced     int    // how many of the item's supply were replaced; 0 if none
+	SupplyName   string // the item's supply, for "Replaced 2 × …"
 	BuildingName string
 	RoomNumber   string
 	RoomName     string
@@ -319,7 +322,8 @@ type LogFilter struct {
 
 func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 	q := `
-		SELECT l.id, l.item_id, i.name, COALESCE(l.task_id, 0), COALESCE(t.name, ''), b.name, COALESCE(r.number, ''), COALESCE(r.name, ''),
+		SELECT l.id, l.item_id, i.name, COALESCE(l.task_id, 0), COALESCE(t.name, ''), l.kind, COALESCE(l.replaced, 0), COALESCE(s.name, ''),
+		       b.name, COALESCE(r.number, ''), COALESCE(r.name, ''),
 		       l.performed_on, l.performed_by, COALESCE(l.cost_cents, 0), l.notes,
 		       COALESCE(NULLIF(u.display_name, ''), u.username, ''),
 		       COALESCE((SELECT c.amount || ' × ' || s.name FROM supply_changes c JOIN supplies s ON s.id = c.supply_id
@@ -330,6 +334,7 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 		LEFT JOIN rooms r ON r.id = i.room_id
 		LEFT JOIN tasks t ON t.id = l.task_id
 		LEFT JOIN users u ON u.id = l.created_by
+		LEFT JOIN supplies s ON s.id = i.supply_id
 		WHERE 1=1`
 	var args []any
 	if f.ItemID != 0 {
@@ -348,7 +353,8 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 	var out []Log
 	for rows.Next() {
 		var l Log
-		if err := rows.Scan(&l.ID, &l.ItemID, &l.ItemName, &l.TaskID, &l.TaskName, &l.BuildingName, &l.RoomNumber, &l.RoomName,
+		if err := rows.Scan(&l.ID, &l.ItemID, &l.ItemName, &l.TaskID, &l.TaskName, &l.Kind, &l.Replaced, &l.SupplyName,
+			&l.BuildingName, &l.RoomNumber, &l.RoomName,
 			&l.PerformedOn, &l.PerformedBy, &l.CostCents, &l.Notes, &l.CreatedBy, &l.SupplyUsed); err != nil {
 			return nil, err
 		}
@@ -368,24 +374,8 @@ func (s *Store) DeleteLog(id int64, userID int64) (itemID int64, err error) {
 	if err := tx.QueryRow(`SELECT item_id FROM maintenance_logs WHERE id = ?`, id).Scan(&itemID); err != nil {
 		return 0, notFound(err)
 	}
-	rows, err := tx.Query(`SELECT supply_id, -delta FROM supply_changes WHERE log_id = ? AND kind = 'used'`, id)
-	if err != nil {
+	if err := putBackTx(tx, id, userID, "Put back: history entry deleted"); err != nil {
 		return 0, err
-	}
-	var giveBack []Adjustment
-	for rows.Next() {
-		a := Adjustment{Kind: "restocked", Note: "Put back: history entry deleted", UserID: userID}
-		if err := rows.Scan(&a.SupplyID, &a.Amount); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		giveBack = append(giveBack, a)
-	}
-	rows.Close()
-	for _, a := range giveBack {
-		if err := adjustSupplyTx(tx, a); err != nil {
-			return 0, err
-		}
 	}
 	if _, err := tx.Exec(`DELETE FROM maintenance_logs WHERE id = ?`, id); err != nil {
 		return 0, err
@@ -395,8 +385,12 @@ func (s *Store) DeleteLog(id int64, userID int64) (itemID int64, err error) {
 
 // Completion records maintenance that was performed.
 type Completion struct {
-	ItemID      int64
-	TaskID      int64 // 0 for ad-hoc maintenance not tied to a task
+	ItemID int64
+	TaskID int64  // 0 for ad-hoc maintenance not tied to a task
+	Kind   string // "work" (default) or "replaced"
+	// Replaced is how many of the item's own supply were replaced. Taking
+	// the item's supply from stock counts as replacing it.
+	Replaced    int
 	PerformedOn string
 	PerformedBy string
 	CostCents   int64
@@ -419,8 +413,19 @@ func (s *Store) RecordMaintenance(c Completion) error {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`INSERT INTO maintenance_logs (item_id, task_id, performed_on, performed_by, cost_cents, notes, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, c.ItemID, nullInt(c.TaskID), c.PerformedOn, c.PerformedBy, nullInt(c.CostCents), c.Notes, nullInt(c.UserID))
+	if c.Kind == "" {
+		c.Kind = "work"
+	}
+	var itemSupply int64
+	if err := tx.QueryRow(`SELECT COALESCE(supply_id, 0) FROM items WHERE id = ?`, c.ItemID).Scan(&itemSupply); err != nil {
+		return notFound(err)
+	}
+	if c.Replaced == 0 && c.SupplyID != 0 && c.SupplyID == itemSupply {
+		c.Replaced = c.SupplyAmount
+	}
+	res, err := tx.Exec(`INSERT INTO maintenance_logs (item_id, task_id, kind, replaced, performed_on, performed_by, cost_cents, notes, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.ItemID, nullInt(c.TaskID), c.Kind, nullInt(int64(c.Replaced)),
+		c.PerformedOn, c.PerformedBy, nullInt(c.CostCents), c.Notes, nullInt(c.UserID))
 	if err != nil {
 		return err
 	}
@@ -429,12 +434,19 @@ func (s *Store) RecordMaintenance(c Completion) error {
 		if err != nil {
 			return err
 		}
-		var itemName, taskName string // only for the history note; blank is fine
-		_ = tx.QueryRow(`SELECT i.name, COALESCE(t.name, '') FROM items i LEFT JOIN tasks t ON t.id = ? WHERE i.id = ?`, c.TaskID, c.ItemID).
-			Scan(&itemName, &taskName)
+		var itemName, taskName, number, room string // only for the history note; blank is fine
+		_ = tx.QueryRow(`SELECT i.name, COALESCE(t.name, ''), COALESCE(r.number, ''), COALESCE(r.name, '')
+			FROM items i LEFT JOIN tasks t ON t.id = ? LEFT JOIN rooms r ON r.id = i.room_id WHERE i.id = ?`, c.TaskID, c.ItemID).
+			Scan(&itemName, &taskName, &number, &room)
+		if room != "" {
+			itemName += ", " + RoomLabel(number, room)
+		}
 		note := "For " + itemName
-		if taskName != "" {
+		switch {
+		case taskName != "":
 			note = taskName + " (" + itemName + ")"
+		case c.Kind == "replaced":
+			note = "Replaced in " + itemName
 		}
 		if err := adjustSupplyTx(tx, Adjustment{SupplyID: c.SupplyID, Kind: "used", Amount: c.SupplyAmount, Note: note, UserID: c.UserID, LogID: logID}); err != nil {
 			return err

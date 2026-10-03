@@ -204,6 +204,14 @@ func (s *Store) SaveSupply(sp *Supply, userID int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := insertSupplyTx(tx, sp, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// insertSupplyTx adds a new supply and records its starting counts.
+func insertSupplyTx(tx *sql.Tx, sp *Supply, userID int64) error {
 	res, err := tx.Exec(`INSERT INTO supplies (building_id, room_id, name, unit, quantity, reorder_at, notes, reusable, in_use, cleaning)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sp.BuildingID, nullInt(sp.RoomID), sp.Name, sp.Unit, sp.Quantity, sp.ReorderAt, sp.Notes, sp.Reusable, sp.InUse, sp.Cleaning)
@@ -213,12 +221,10 @@ func (s *Store) SaveSupply(sp *Supply, userID int64) error {
 	if sp.ID, err = res.LastInsertId(); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO supply_changes (supply_id, kind, amount, delta, quantity_after, in_use_after, cleaning_after, created_by)
+	_, err = tx.Exec(`INSERT INTO supply_changes (supply_id, kind, amount, delta, quantity_after, in_use_after, cleaning_after, created_by)
 		VALUES (?, 'added', ?, ?, ?, ?, ?, ?)`,
-		sp.ID, sp.Total(), sp.Quantity, sp.Quantity, sp.InUse, sp.Cleaning, nullInt(userID)); err != nil {
-		return err
-	}
-	return tx.Commit()
+		sp.ID, sp.Total(), sp.Quantity, sp.Quantity, sp.InUse, sp.Cleaning, nullInt(userID))
+	return err
 }
 
 func (s *Store) DeleteSupply(id int64) error {
@@ -361,6 +367,34 @@ func adjustSupplyTx(tx *sql.Tx, a Adjustment) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.SupplyID, a.Kind, n, stock-sp.Quantity, stock, inUse, cleaning, strings.TrimSpace(a.Note), nullInt(a.UserID), nullInt(a.LogID))
 	return err
+}
+
+// putBackTx restocks whatever was taken from supplies as part of a
+// maintenance history entry that is being deleted.
+func putBackTx(tx *sql.Tx, logID, userID int64, note string) error {
+	rows, err := tx.Query(`SELECT supply_id, -delta FROM supply_changes WHERE log_id = ? AND kind = 'used'`, logID)
+	if err != nil {
+		return err
+	}
+	var giveBack []Adjustment
+	for rows.Next() {
+		a := Adjustment{Kind: "restocked", Note: note, UserID: userID}
+		if err := rows.Scan(&a.SupplyID, &a.Amount); err != nil {
+			rows.Close()
+			return err
+		}
+		giveBack = append(giveBack, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, a := range giveBack {
+		if err := adjustSupplyTx(tx, a); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListSupplyChanges returns a supply's history, newest first.

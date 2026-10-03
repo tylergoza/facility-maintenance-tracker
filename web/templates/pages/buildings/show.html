@@ -12,6 +12,15 @@
   </div>
 </div>
 {{if $b.Notes}}<div class="card notes">{{range lines $b.Notes}}<p>{{.}}</p>{{end}}</div>{{end}}
+{{if .Problems}}
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>
+    <a class="btn btn--ghost btn--sm" href="/problems?building={{$b.ID}}">All problems</a>
+  </div>
+  {{template "problem-table" (dict "Problems" .Problems "ShowLocation" true)}}
+</section>
+{{end}}
 
 <section class="section">
   <div class="section__head">
@@ -40,8 +49,8 @@
     <h2 class="section__title">Building-wide items <span class="count">{{len .Items}}</span></h2>
     <a class="btn btn--sm" href="/items/new?building={{$b.ID}}">Add item</a>
   </div>
-  <p class="muted small">Things not in a specific room, such as the roof, HVAC units, parking lot or fire alarm panel.</p>
-  {{if .Items}}{{template "item-table" (dict "Items" .Items "ShowLocation" false)}}{{end}}
+  <p class="muted small">Things not in a specific room, such as the roof, HVAC units, parking lot lights or fire alarm panel.</p>
+  {{if .Items}}{{template "item-groups" (dict "Groups" .ItemGroups "Next" .URI)}}{{end}}
 </section>
 
 <section class="section">

@@ -44,9 +44,26 @@ type Item struct {
 	SerialNumber string
 	InstallDate  string
 	Notes        string
+	// How many identical ones this item counts, e.g. 10 outlets.
+	Quantity int
+	// Supply each one uses (SupplyID 0 = none), e.g. 1 bulb, and how many
+	// of it each takes. Supply holds its current stock.
+	SupplyID  int64
+	SupplyPer int
+	Supply    Supply
+	// Portable items (projectors, TVs) get a Move action.
+	Portable bool
 	// Earliest due date across the item's active tasks ("" if none).
 	NextDue string
+	// Most recent date its supply was replaced ("" if never recorded).
+	LastReplaced string
 }
+
+// SupplyTotal is how many of the supply it takes to replace every one.
+func (i Item) SupplyTotal() int { return i.Quantity * i.SupplyPer }
+
+// SupplyShort reports whether there isn't enough on hand to replace one.
+func (i Item) SupplyShort() bool { return i.SupplyID != 0 && i.Supply.Quantity < i.SupplyPer }
 
 // Location renders "Building › Room" or just the building name.
 func (i Item) Location() string {
@@ -189,12 +206,11 @@ func (s *Store) SaveRoom(r *Room) error {
 	if _, err := tx.Exec(`UPDATE rooms SET building_id = ?, number = ?, name = ?, floor = ?, notes = ? WHERE id = ?`, r.BuildingID, r.Number, r.Name, r.Floor, r.Notes, r.ID); err != nil {
 		return err
 	}
-	// If the room moved to another building, its items and supplies move with it.
-	if _, err := tx.Exec(`UPDATE items SET building_id = ? WHERE room_id = ?`, r.BuildingID, r.ID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE supplies SET building_id = ? WHERE room_id = ?`, r.BuildingID, r.ID); err != nil {
-		return err
+	// If the room moved to another building, everything in it moves with it.
+	for _, table := range []string{"items", "supplies", "problems"} {
+		if _, err := tx.Exec(`UPDATE `+table+` SET building_id = ? WHERE room_id = ?`, r.BuildingID, r.ID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -231,17 +247,24 @@ type ItemFilter struct {
 	BuildingID int64
 	RoomID     int64
 	NoRoom     bool // only items not assigned to a room
+	SupplyID   int64
 	Query      string
 }
 
 const itemSelect = `
 	SELECT i.id, i.building_id, b.name, COALESCE(i.room_id, 0), COALESCE(r.number, ''), COALESCE(r.name, ''),
 	       i.name, i.category, i.manufacturer, i.model, i.serial_number,
-	       COALESCE(i.install_date, ''), i.notes,
-	       COALESCE((SELECT MIN(t.next_due_on) FROM tasks t WHERE t.item_id = i.id AND t.active = 1), '')
+	       COALESCE(i.install_date, ''), i.notes, i.quantity, COALESCE(i.supply_id, 0), i.supply_per, i.portable,
+	       COALESCE(s.name, ''), COALESCE(s.unit, ''), COALESCE(s.quantity, 0), COALESCE(s.reorder_at, 0),
+	       COALESCE(sb.name, ''), COALESCE(sr.number, ''), COALESCE(sr.name, ''),
+	       COALESCE((SELECT MIN(t.next_due_on) FROM tasks t WHERE t.item_id = i.id AND t.active = 1), ''),
+	       COALESCE((SELECT MAX(l.performed_on) FROM maintenance_logs l WHERE l.item_id = i.id AND l.replaced IS NOT NULL), '')
 	FROM items i
 	JOIN buildings b ON b.id = i.building_id
-	LEFT JOIN rooms r ON r.id = i.room_id`
+	LEFT JOIN rooms r ON r.id = i.room_id
+	LEFT JOIN supplies s ON s.id = i.supply_id
+	LEFT JOIN buildings sb ON sb.id = s.building_id
+	LEFT JOIN rooms sr ON sr.id = s.room_id`
 
 func scanItems(rows *sql.Rows) ([]Item, error) {
 	defer rows.Close()
@@ -249,9 +272,13 @@ func scanItems(rows *sql.Rows) ([]Item, error) {
 	for rows.Next() {
 		var i Item
 		if err := rows.Scan(&i.ID, &i.BuildingID, &i.BuildingName, &i.RoomID, &i.RoomNumber, &i.RoomName,
-			&i.Name, &i.Category, &i.Manufacturer, &i.Model, &i.SerialNumber, &i.InstallDate, &i.Notes, &i.NextDue); err != nil {
+			&i.Name, &i.Category, &i.Manufacturer, &i.Model, &i.SerialNumber, &i.InstallDate, &i.Notes,
+			&i.Quantity, &i.SupplyID, &i.SupplyPer, &i.Portable,
+			&i.Supply.Name, &i.Supply.Unit, &i.Supply.Quantity, &i.Supply.ReorderAt,
+			&i.Supply.BuildingName, &i.Supply.RoomNumber, &i.Supply.RoomName, &i.NextDue, &i.LastReplaced); err != nil {
 			return nil, err
 		}
+		i.Supply.ID = i.SupplyID
 		out = append(out, i)
 	}
 	return out, rows.Err()
@@ -270,6 +297,10 @@ func (s *Store) ListItems(f ItemFilter) ([]Item, error) {
 	}
 	if f.NoRoom {
 		q += ` AND i.room_id IS NULL`
+	}
+	if f.SupplyID != 0 {
+		q += ` AND i.supply_id = ?`
+		args = append(args, f.SupplyID)
 	}
 	if f.Query != "" {
 		like := "%" + f.Query + "%"
@@ -299,21 +330,107 @@ func (s *Store) GetItem(id int64) (*Item, error) {
 	return &is[0], nil
 }
 
-func (s *Store) SaveItem(i *Item) error {
-	i.Name = strings.TrimSpace(i.Name)
-	args := []any{i.BuildingID, nullInt(i.RoomID), i.Name, strings.TrimSpace(i.Category), i.Manufacturer, i.Model, i.SerialNumber, nullStr(i.InstallDate), i.Notes}
+// SaveItem creates or updates an item's details. When newSupply is given
+// it is added to supplies first (in the item's building) and becomes the
+// supply the item uses, in the same transaction. Location changes on an
+// existing item should go through MoveItem so they're recorded.
+func (s *Store) SaveItem(i *Item, newSupply *Supply, userID int64) error {
+	i.Name, i.Category = strings.TrimSpace(i.Name), strings.TrimSpace(i.Category)
+	i.Quantity, i.SupplyPer = max(i.Quantity, 1), max(i.SupplyPer, 1)
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if newSupply != nil {
+		newSupply.Name, newSupply.Unit = strings.TrimSpace(newSupply.Name), strings.TrimSpace(newSupply.Unit)
+		newSupply.BuildingID, newSupply.Reusable = i.BuildingID, false
+		if err := insertSupplyTx(tx, newSupply, userID); err != nil {
+			return err
+		}
+		i.SupplyID = newSupply.ID
+	}
+	args := []any{i.BuildingID, nullInt(i.RoomID), i.Name, i.Category, i.Manufacturer, i.Model, i.SerialNumber, nullStr(i.InstallDate), i.Notes,
+		i.Quantity, nullInt(i.SupplyID), i.SupplyPer, i.Portable}
 	if i.ID == 0 {
-		res, err := s.DB.Exec(`INSERT INTO items (building_id, room_id, name, category, manufacturer, model, serial_number, install_date, notes)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...)
+		res, err := tx.Exec(`INSERT INTO items (building_id, room_id, name, category, manufacturer, model, serial_number, install_date, notes,
+			quantity, supply_id, supply_per, portable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...)
 		if err != nil {
 			return err
 		}
-		i.ID, err = res.LastInsertId()
+		if i.ID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(`UPDATE items SET building_id = ?, room_id = ?, name = ?, category = ?, manufacturer = ?, model = ?,
+		serial_number = ?, install_date = ?, notes = ?, quantity = ?, supply_id = ?, supply_per = ?, portable = ? WHERE id = ?`, append(args, i.ID)...); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`UPDATE items SET building_id = ?, room_id = ?, name = ?, category = ?, manufacturer = ?, model = ?,
-		serial_number = ?, install_date = ?, notes = ? WHERE id = ?`, append(args, i.ID)...)
-	return err
+	return tx.Commit()
+}
+
+// Move is a request to move an item to another room or building.
+type Move struct {
+	ItemID     int64
+	BuildingID int64
+	RoomID     int64 // 0 = building-wide / no room
+	MovedOn    string
+	Note       string
+	UserID     int64
+}
+
+// MoveItem changes an item's location and records the move in its
+// history. Moving to where it already is records nothing.
+func (s *Store) MoveItem(m Move) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var fromBuilding, fromRoom int64
+	if err := tx.QueryRow(`SELECT building_id, COALESCE(room_id, 0) FROM items WHERE id = ?`, m.ItemID).Scan(&fromBuilding, &fromRoom); err != nil {
+		return notFound(err)
+	}
+	if fromBuilding == m.BuildingID && fromRoom == m.RoomID {
+		return nil
+	}
+	from, err := locationTx(tx, fromBuilding, fromRoom)
+	if err != nil {
+		return err
+	}
+	to, err := locationTx(tx, m.BuildingID, m.RoomID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE items SET building_id = ?, room_id = ? WHERE id = ?`, m.BuildingID, nullInt(m.RoomID), m.ItemID); err != nil {
+		return err
+	}
+	notes := "Moved from " + from + " to " + to + "."
+	if note := strings.TrimSpace(m.Note); note != "" {
+		notes += "\n" + note
+	}
+	var by string
+	_ = tx.QueryRow(`SELECT COALESCE(NULLIF(display_name, ''), username) FROM users WHERE id = ?`, m.UserID).Scan(&by)
+	_, err = tx.Exec(`INSERT INTO maintenance_logs (item_id, kind, performed_on, performed_by, notes, created_by) VALUES (?, 'moved', ?, ?, ?, ?)`,
+		m.ItemID, m.MovedOn, by, notes, nullInt(m.UserID))
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// locationTx renders "Building › Room" for a building and optional room.
+func locationTx(tx *sql.Tx, buildingID, roomID int64) (string, error) {
+	var building, number, room string
+	if err := tx.QueryRow(`SELECT name FROM buildings WHERE id = ?`, buildingID).Scan(&building); err != nil {
+		return "", notFound(err)
+	}
+	if roomID == 0 {
+		return building, nil
+	}
+	if err := tx.QueryRow(`SELECT number, name FROM rooms WHERE id = ? AND building_id = ?`, roomID, buildingID).Scan(&number, &room); err != nil {
+		return "", notFound(err)
+	}
+	return building + " › " + RoomLabel(number, room), nil
 }
 
 func (s *Store) DeleteItem(id int64) error {

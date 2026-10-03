@@ -1,0 +1,44 @@
+{{define "content"}}
+{{$i := .Item}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{$i.ID}}">{{$i.Name}}</a></nav>
+<div class="page-head">
+  <div>
+    <h1>Move {{$i.Name}}</h1>
+    <p class="muted">Now in {{$i.Location}}</p>
+  </div>
+</div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="/items/{{$i.ID}}/move" class="form" data-controller="room-select">
+    {{template "csrf" .CSRF}}
+    <input type="hidden" name="next" value="{{.Next}}">
+    <div class="field-row">
+      <div class="field">
+        <label for="building_id">Building</label>
+        <select id="building_id" name="building_id" required data-room-select-target="building" data-action="room-select#filter">
+          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Form.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="room_id">Room</label>
+        <select id="room_id" name="room_id" data-room-select-target="room">
+          <option value="">— Building-wide / no room —</option>
+          {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <div class="field field--narrow">
+      <label for="moved_on">Date moved</label>
+      <input id="moved_on" name="moved_on" type="date" value="{{.Form.MovedOn}}" max="{{today}}" required>
+    </div>
+    <div class="field">
+      <label for="note">Note <span class="optional">optional</span></label>
+      <input id="note" name="note" value="{{.Form.Note}}" placeholder="e.g. For the youth retreat, back next week">
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Move</button>
+      <a class="btn btn--ghost" href="{{if .Next}}{{.Next}}{{else}}/items/{{$i.ID}}{{end}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

@@ -1,0 +1,67 @@
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1>Report a problem</h1>
+    <p class="muted">Something broken, leaking, or not working right? Let the facilities team know.</p>
+  </div>
+</div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  {{if not .Buildings}}
+    <p>No buildings have been set up yet.</p>
+  {{else}}
+  <form method="post" action="/report" class="form" data-controller="room-select">
+    {{template "csrf" .CSRF}}
+    {{if .Form.ItemID}}
+      <input type="hidden" name="item_id" value="{{.Form.ItemID}}">
+      <p class="small">About: <strong>{{.Form.ItemName}}</strong></p>
+    {{end}}
+    <div class="field-row">
+      <div class="field">
+        <label for="building_id">Building</label>
+        <select id="building_id" name="building_id" required data-room-select-target="building" data-action="room-select#filter">
+          <option value="">Choose…</option>
+          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Form.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="room_id">Room <span class="optional">optional</span></label>
+        <select id="room_id" name="room_id" data-room-select-target="room">
+          <option value="">— Not in a room / not sure —</option>
+          {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label for="title">What's wrong?</label>
+      <input id="title" name="title" value="{{.Form.Title}}" required maxlength="200" {{if not .Form.Title}}autofocus{{end}} placeholder="e.g. Faucet dripping, light out, door won't latch">
+    </div>
+    <div class="field">
+      <label for="details">Details <span class="optional">optional</span></label>
+      <textarea id="details" name="details" rows="4" maxlength="5000" placeholder="Where exactly, when you noticed it, anything that makes it worse…">{{.Form.Details}}</textarea>
+    </div>
+    {{if not .User}}
+      <div class="field-row">
+        <div class="field">
+          <label for="reporter_name">Your name</label>
+          <input id="reporter_name" name="reporter_name" value="{{.Form.ReporterName}}" required maxlength="100" autocomplete="name">
+        </div>
+        <div class="field">
+          <label for="reporter_contact">Phone or email <span class="optional">optional</span></label>
+          <input id="reporter_contact" name="reporter_contact" value="{{.Form.ReporterContact}}" maxlength="200" autocomplete="email">
+        </div>
+      </div>
+      <p class="hint">Only the facilities team sees your name and contact details.</p>
+      <div class="hp" aria-hidden="true">
+        <label for="website">Leave this empty</label>
+        <input id="website" name="website" tabindex="-1" autocomplete="off">
+      </div>
+    {{end}}
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Send report</button>
+      {{if .User}}<a class="btn btn--ghost" href="/problems">Cancel</a>{{end}}
+    </div>
+  </form>
+  {{end}}
+</div>
+{{end}}

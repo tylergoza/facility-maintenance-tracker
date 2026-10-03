@@ -18,6 +18,7 @@
   </div>
 
   {{if eq .Tasks.Total 0}}
+    {{template "open-problems" .}}
     {{template "low-supplies" .}}
     <div class="empty">
       <h2>Nothing scheduled yet</h2>
@@ -49,6 +50,7 @@
       </section>
     {{end}}
 
+    {{template "open-problems" .}}
     {{template "low-supplies" .}}
 
     <div class="toolbar">
@@ -74,6 +76,18 @@
     <p class="empty empty--inline" hidden data-task-filter-target="none">No tasks match your filters.</p>
   {{end}}
 </div>
+{{end}}
+
+{{define "open-problems"}}
+  {{if .Problems}}
+    <section class="section" aria-labelledby="open-problems">
+      <div class="section__head">
+        <h2 id="open-problems" class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>
+        <a class="btn btn--ghost btn--sm" href="/problems{{if .BuildingID}}?building={{.BuildingID}}{{end}}">All problems</a>
+      </div>
+      {{template "problem-table" (dict "Problems" .Problems "ShowLocation" true)}}
+    </section>
+  {{end}}
 {{end}}
 
 {{define "low-supplies"}}

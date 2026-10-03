@@ -91,6 +91,17 @@
 </section>
 {{end}}
 
+{{if .Items}}
+<section class="section">
+  <h2 class="section__title">Items that use it <span class="count">{{len .Items}}</span></h2>
+  <ul class="plain-list">
+    {{range .Items}}
+      <li><a href="/items/{{.ID}}"><strong>{{.Name}}</strong></a>: {{.Quantity}}, {{.SupplyPer}} each ({{.SupplyTotal}} to replace them all) <span class="muted small">· {{.Location}}</span></li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+
 <section class="section">
   <h2 class="section__title">History <span class="count">{{len .Changes}}</span></h2>
   {{if .Changes}}

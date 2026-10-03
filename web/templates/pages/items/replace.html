@@ -1,0 +1,48 @@
+{{define "content"}}
+{{$i := .Item}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{$i.ID}}">{{$i.Name}}</a> <span class="muted">· {{$i.Location}}</span></nav>
+<div class="page-head">
+  <div>
+    <h1>Replace {{$i.Supply.Name}}</h1>
+    <p class="muted">{{$i.Name}}{{if gt $i.Quantity 1}} × {{$i.Quantity}}{{end}} · {{$i.SupplyPer}} each</p>
+  </div>
+</div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="/items/{{$i.ID}}/replace" class="form">
+    {{template "csrf" .CSRF}}
+    <input type="hidden" name="next" value="{{.Next}}">
+    <div class="field-row">
+      <div class="field">
+        <label for="performed_on">Date replaced</label>
+        <input id="performed_on" name="performed_on" type="date" value="{{.Form.PerformedOn}}" max="{{today}}" required>
+      </div>
+      <div class="field">
+        <label for="replaced">How many{{if $i.Supply.Unit}} {{$i.Supply.Unit}}{{end}}</label>
+        <input id="replaced" name="replaced" type="number" min="1" step="1" inputmode="numeric" value="{{.Form.Replaced}}" required>
+      </div>
+    </div>
+    <fieldset class="fieldset">
+      <legend>Supplies</legend>
+      <p class="small">
+        <a href="/supplies/{{$i.SupplyID}}">{{$i.Supply.Name}}</a> ·
+        {{$i.Supply.QuantityLabel}} on hand {{template "stock-badge" $i.Supply}}
+        <span class="muted">({{$i.Supply.Location}})</span>
+      </p>
+      <label class="check">
+        <input type="checkbox" name="took_supply" value="1" {{if .Form.SupplyID}}checked{{end}}>
+        Took it from supplies
+      </label>
+      {{if $i.SupplyShort}}<p class="hint">Not enough on hand. Leave this unticked if it came from somewhere else, or <a href="/supplies/{{$i.SupplyID}}">restock</a> first.</p>{{end}}
+    </fieldset>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="2" placeholder="Which ones, anything else noticed…">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn btn--ghost" href="{{if .Next}}{{.Next}}{{else}}/items/{{$i.ID}}{{end}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

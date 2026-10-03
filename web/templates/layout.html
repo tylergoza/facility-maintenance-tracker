@@ -37,11 +37,14 @@
           <a href="/buildings" {{if eq .Path "/buildings"}}aria-current="page"{{end}}>Buildings</a>
           <a href="/items" {{if eq .Path "/items"}}aria-current="page"{{end}}>Items</a>
           <a href="/supplies" {{if eq .Path "/supplies"}}aria-current="page"{{end}}>Supplies</a>
+          <a href="/problems" {{if eq .Path "/problems"}}aria-current="page"{{end}}>Problems</a>
           <a href="/history" {{if eq .Path "/history"}}aria-current="page"{{end}}>History</a>
           {{if .User.IsAdmin}}
             <a href="/admin/users" {{if eq .Path "/admin/users"}}aria-current="page"{{end}}>Users</a>
             <a href="/admin/settings" {{if eq .Path "/admin/settings"}}aria-current="page"{{end}}>Settings</a>
           {{end}}
+        {{else if .PublicReports}}
+          <a href="/report" {{if eq .Path "/report"}}aria-current="page"{{end}}>Report a problem</a>
         {{end}}
         <span class="nav__spacer"></span>
         <button type="button" class="btn btn--ghost btn--sm" hidden

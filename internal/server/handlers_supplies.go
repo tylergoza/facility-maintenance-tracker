@@ -130,7 +130,12 @@ func (s *Server) handleSupplyShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "supplies/show", map[string]any{"Title": sp.Name, "Supply": sp, "Changes": changes, "Tasks": tasks})
+	items, err := s.store.ListItems(store.ItemFilter{SupplyID: sp.ID})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "supplies/show", map[string]any{"Title": sp.Name, "Supply": sp, "Changes": changes, "Tasks": tasks, "Items": items})
 }
 
 func (s *Server) handleSupplyEdit(w http.ResponseWriter, r *http.Request) {

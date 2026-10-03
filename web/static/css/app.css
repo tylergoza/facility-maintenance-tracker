@@ -260,6 +260,9 @@ details > summary { cursor: pointer; color: var(--muted); }
 .badge--overdue { background: var(--overdue-bg); color: var(--overdue); }
 .badge--due-soon { background: var(--due-soon-bg); color: var(--due-soon); }
 .badge--upcoming { background: var(--upcoming-bg); color: var(--upcoming); }
+.badge--problem-open { background: var(--overdue-bg); color: var(--overdue); }
+.badge--problem-in_progress { background: var(--due-soon-bg); color: var(--due-soon); }
+.badge--problem-resolved { background: var(--upcoming-bg); color: var(--upcoming); }
 
 .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 8px; }
 @media (min-width: 700px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
@@ -336,6 +339,8 @@ details > summary { cursor: pointer; color: var(--muted); }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table .num { text-align: right; }
 .table .actions { text-align: right; white-space: nowrap; }
+.table .table__group th { background: transparent; color: var(--text); font-size: .95rem; text-transform: none; letter-spacing: 0; padding-top: 16px; }
+.table tbody + tbody .table__group th { border-top: 1px solid var(--border); }
 
 @media (max-width: 699px) {
   .table--stack thead { display: none; }
@@ -423,6 +428,13 @@ select:disabled { opacity: .6; }
 }
 .segmented label:has(input:checked) { border-color: var(--primary); background: var(--surface-2); font-weight: 700; }
 .segmented input { accent-color: var(--primary); }
+
+/* Problems */
+.timeline { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.timeline li { border-left: 3px solid var(--border); padding: 2px 0 2px 12px; }
+.timeline p { margin: 4px 0 0; }
+/* Honeypot: off-screen so people never fill it in; bots usually do. */
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 
 @media print {
   .topbar, .toolbar, .tiles, .task-card__actions, .page-head__actions, .footer, .btn { display: none !important; }
