@@ -1,7 +1,7 @@
 BINARY := maintenance-tracker
 LDFLAGS := -s -w
 
-.PHONY: dev run test build build-linux build-linux-arm docker clean
+.PHONY: dev run test build build-linux build-linux-arm docker provision deploy clean
 
 # Serve templates/static from disk: edit HTML/JS/CSS and just refresh.
 dev:
@@ -26,6 +26,13 @@ build-linux-arm:
 
 docker:
 	docker build -t $(BINARY) .
+
+# DigitalOcean droplet via Ansible: see "DigitalOcean with Ansible" in the README.
+provision:
+	cd deploy/ansible && ansible-playbook provision.yml
+
+deploy:
+	cd deploy/ansible && ansible-playbook deploy.yml
 
 clean:
 	rm -rf bin

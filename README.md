@@ -178,6 +178,68 @@ as root leaves files the service can't write to.
 | Backup | **Settings → Download backup**, or `sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db backup /var/lib/maintenance-tracker/backup.db` |
 | Upgrade | Copy the new binary, `sudo install` it as above, `sudo systemctl restart maintenance-tracker` (migrations run on start) |
 
+### DigitalOcean with Ansible
+
+`deploy/ansible/` automates the binary + systemd setup on a DigitalOcean
+droplet. Nothing private is committed: the API token comes from the
+environment, the droplet is found by its tag on every run, and your domain
+and settings go in the gitignored `deploy/ansible/vars.yml`.
+
+You need Ansible on your machine (`brew install ansible` or
+`pipx install ansible-core`), Go, a DigitalOcean API token with read/write
+scope, and your domain added under **Networking → Domains** in DigitalOcean
+with the registrar's nameservers pointed at it.
+
+```sh
+cp deploy/ansible/vars.example.yml deploy/ansible/vars.yml   # set app_domain and dns_zone
+export DIGITALOCEAN_TOKEN=...          # e.g. $(security find-generic-password -s digitalocean -w)
+make provision                         # first time
+make deploy                            # every update after that
+```
+
+`make provision` uploads your SSH public key to the account, creates the
+droplet (Ubuntu 26.04, $6 size in New York 3 by default, weekly droplet backups on) in your chosen project, a cloud
+firewall allowing only SSH, HTTP and HTTPS, and the DNS A record. It then
+installs updates, Caddy and the service user, and runs the deploy. Running it
+again leaves existing resources alone.
+
+`make deploy` runs the tests, builds `bin/maintenance-tracker-linux-amd64`
+here, and installs it with `deploy/maintenance-tracker.service` and a Caddyfile
+for your domain. When the binary changes, it backs up the database to
+`/var/lib/maintenance-tracker/backups/` first and keeps the last 10 backups.
+The deploy fails if the app doesn't answer `/healthz` afterwards.
+
+On the first deploy, the admin user is created before the app starts, so
+`/setup` is never exposed. Set `MT_ADMIN_PASSWORD` to choose its password, or
+leave it unset and a random one is printed at the end. Then sign in and set
+**Settings → Site address**.
+
+Every setting and its default (region, size, time zone, which addresses can
+use SSH, …) is in `deploy/ansible/defaults.yml`; override any of them in
+`vars.yml`.
+
+Ansible can't answer a PIN prompt, so if your SSH key is on a hardware token
+(e.g. a YubiKey) the plays hang at "Wait for SSH". Make a deploy key just for
+this droplet, keep its passphrase in the macOS Keychain, and set
+`ssh_private_key_file` in `vars.yml`:
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/maintenance_deploy -C maintenance-deploy
+/usr/bin/ssh-add --apple-use-keychain ~/.ssh/maintenance_deploy
+```
+
+The keychain flags exist only in macOS's own `ssh-add`, hence the full path
+(Homebrew's OpenSSH, often installed for hardware keys, comes first on the
+PATH). After a restart, `/usr/bin/ssh-add --apple-load-keychain` puts the key
+back in the agent without asking for the passphrase.
+
+To have your own cloud firewalls cover the droplet, list their tags in
+`do_extra_tags` and set `do_firewall: false`. Pass `-e skip_tests=true` to `ansible-playbook` to skip the tests.
+To roll back, check out the earlier commit and `make deploy` it. If its
+migrations changed the database, also restore the pre-deploy backup (see
+[Moving between hosts](#moving-between-hosts)). SSH in as `root@<domain>` for
+logs and commands, as in the systemd section above.
+
 ### Binary, run by hand
 
 On any machine with the binary (`make build` builds one for the current OS):
@@ -212,7 +274,7 @@ internal/store/             SQLite access, migrations (migrations/*.sql), schedu
 internal/server/            routes, middleware, handlers, PWA endpoints
 web/templates/              layout, partials, pages, sw.js (service worker)
 web/static/                 css, js (application, autoloader, controllers, vendor), icons
-deploy/                     systemd unit, Caddyfile
+deploy/                     systemd unit, Caddyfile, ansible/ (DigitalOcean provision + deploy)
 ```
 
 ## Tests
