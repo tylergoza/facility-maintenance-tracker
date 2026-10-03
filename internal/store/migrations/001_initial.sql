@@ -92,5 +92,5 @@ CREATE TABLE settings (
     value TEXT NOT NULL
 );
 INSERT INTO settings (key, value) VALUES
-    ('site_name', 'Church Maintenance'),
+    ('site_name', 'Facility Maintenance'),
     ('due_soon_days', '30');

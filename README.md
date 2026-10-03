@@ -1,4 +1,4 @@
-# Church Maintenance Tracker
+# Facility Maintenance Tracker
 
 Track buildings, rooms, and the equipment in them, with scheduled and recurring
 maintenance. A public dashboard shows what's overdue and coming up; signed-in
@@ -61,7 +61,7 @@ with an import map, so there are no CDN calls and it works offline.
 |---|---|---|---|
 | `ADDR` | `-addr` | `:8080` | Listen address |
 | `DB_PATH` | `-db` | `data/maintenance.db` | SQLite file (created with migrations applied on start) |
-| `TZ` | | system | Church time zone: decides what "today"/"overdue" means |
+| `TZ` | | system | Facility time zone: decides what "today"/"overdue" means |
 | `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from Caddy/nginx |
 | `DEV=1` | `-dev` | off | Load templates/static from disk |
 

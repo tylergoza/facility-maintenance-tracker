@@ -1,4 +1,4 @@
-module github.com/mountainview/maintenance-tracker
+module github.com/tylergoza/facility-maintenance-tracker
 
 go 1.27.1
 

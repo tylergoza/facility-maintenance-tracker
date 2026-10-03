@@ -1,4 +1,4 @@
-// Command maintenance-tracker runs the church maintenance tracker web app.
+// Command maintenance-tracker runs the facility maintenance tracker web app.
 //
 //	maintenance-tracker                       start the web server
 //	maintenance-tracker create-user NAME      create a user (prompts for password)
@@ -26,8 +26,8 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/mountainview/maintenance-tracker/internal/server"
-	"github.com/mountainview/maintenance-tracker/internal/store"
+	"github.com/tylergoza/facility-maintenance-tracker/internal/server"
+	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 )
 
 func env(key, fallback string) string {

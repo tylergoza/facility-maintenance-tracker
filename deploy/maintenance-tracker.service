@@ -4,7 +4,7 @@
 #   sudo cp deploy/maintenance-tracker.service /etc/systemd/system/
 #   sudo systemctl enable --now maintenance-tracker
 [Unit]
-Description=Church Maintenance Tracker
+Description=Facility Maintenance Tracker
 After=network.target
 
 [Service]

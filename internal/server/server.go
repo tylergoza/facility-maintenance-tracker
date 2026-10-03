@@ -23,8 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mountainview/maintenance-tracker/internal/store"
-	"github.com/mountainview/maintenance-tracker/web"
+	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
+	"github.com/tylergoza/facility-maintenance-tracker/web"
 )
 
 type Config struct {
@@ -95,7 +95,7 @@ func (s *Server) reloadSettings() {
 		days = 30
 	}
 	s.dueSoonDays.Store(int64(days))
-	s.siteName.Store(s.store.Setting("site_name", "Church Maintenance"))
+	s.siteName.Store(s.store.Setting("site_name", "Facility Maintenance"))
 }
 
 func (s *Server) SiteName() string { return s.siteName.Load().(string) }

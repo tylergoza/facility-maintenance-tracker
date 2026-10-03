@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"github.com/mountainview/maintenance-tracker/internal/store"
+	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 )
 
 // seedDemo fills an empty database with realistic sample data so the
