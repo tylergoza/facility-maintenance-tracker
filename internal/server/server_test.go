@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -511,7 +512,7 @@ func TestProblems(t *testing.T) {
 	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Sink"}}, 200)
 
 	if body := c.get("/report?item=1", 200); !strings.Contains(body, `value="1" data-lineage="3 2 1" selected>Sink (110 – Kitchen)`) ||
-		!strings.Contains(body, `value="3" data-path="Main › 110 – Kitchen" data-level="4" selected>`) {
+		!strings.Contains(body, `value="3" data-path="Main › 110 – Kitchen" data-kind="room" selected>`) {
 		t.Error("report form should be preset from the item")
 	}
 	body := c.post("/report", "/report", url.Values{"place_id": {"2"}, "item_id": {"1"}, "title": {"Faucet dripping"}, "details": {"Hot side"}}, 200)
@@ -804,32 +805,58 @@ func TestPlaces(t *testing.T) {
 	c, st := newTestServer(t)
 	c.post("/setup", "/setup", url.Values{"site_name": {"Grace Church"}, "username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
 	// Site 1 is made for the first building (2).
-	addPlaces(c, "building:Main", "floor:2::2nd floor", "zone:3::Classrooms", "room:4:201:Nursery", "room:2::Sanctuary", "area:6::Stage")
+	addPlaces(c, "building:Main", "floor:2::2nd floor", "area:3::Classrooms", "room:4:201:Nursery", "room:2::Sanctuary", "area:6::Stage")
 	if site, _ := st.GetPlace(1); site.Kind != "site" || site.Name != "Grace Church" {
 		t.Fatalf("site = %+v", site)
 	}
-	c.post("/places/4/edit", "/places/4", url.Values{"kind": {"zone"}, "parent_id": {"3"}, "name": {"Classrooms"}, "tags": {"classrooms, Kids,  kids "}}, 200)
+	c.post("/places/4/edit", "/places/4", url.Values{"kind": {"area"}, "parent_id": {"3"}, "name": {"Classrooms"}, "tags": {"classrooms, Kids,  kids "}}, 200)
 	if p, _ := st.GetPlace(4); strings.Join(p.Tags, "|") != "classrooms|Kids" {
 		t.Errorf("tags = %q", p.Tags)
 	}
 
-	// The tree rules: only higher levels hold lower ones, and nothing goes
-	// inside itself.
+	// The rules for what goes inside what, and nothing goes inside itself.
 	for _, bad := range []struct {
 		path string
 		form url.Values
 		want string
 	}{
-		{"/places", url.Values{"kind": {"room"}, "parent_id": {"7"}, "name": {"Closet"}}, "A room can&#39;t go inside an area"},
+		{"/places", url.Values{"kind": {"room"}, "parent_id": {"5"}, "name": {"Closet"}}, "A room can&#39;t go inside a room. It can go inside a building, floor or area."},
+		{"/places", url.Values{"kind": {"floor"}, "parent_id": {"3"}, "name": {"Mezzanine"}}, "A floor can&#39;t go inside a floor"},
 		{"/places", url.Values{"kind": {"building"}, "parent_id": {"5"}, "name": {"Shed"}}, "A building can&#39;t go inside a room"},
 		{"/places", url.Values{"kind": {"castle"}, "parent_id": {"2"}, "name": {"X"}}, "Choose what kind of place it is"},
-		{"/places/4", url.Values{"kind": {"area"}, "parent_id": {"3"}, "name": {"Classrooms"}}, "201 – Nursery (a room) is inside it, so it can&#39;t be an area"},
+		{"/places/4", url.Values{"kind": {"room"}, "parent_id": {"3"}, "name": {"Classrooms"}}, "201 – Nursery (a room) is inside it, and a room can&#39;t hold a room"},
 		{"/places/3", url.Values{"kind": {"floor"}, "parent_id": {"4"}, "name": {"2nd floor"}}, "can&#39;t go inside itself"},
 		{"/places/bulk", url.Values{"kind": {"building"}, "parent_id": {"5"}, "lines": {"Shed"}}, "A building can&#39;t go inside a room"},
 	} {
 		if body := c.post("/places/new", bad.path, bad.form, 422); !strings.Contains(body, bad.want) {
 			t.Errorf("%s %v: missing %q", bad.path, bad.form, bad.want)
 		}
+	}
+
+	// A room inside an area, and an area holding a floor, are fine.
+	addPlaces(c, "room:7::Green room", "floor:4::Mezzanine") // places 8, 9
+
+	// A shared stairwell: lives on the 2nd floor, also off the Sanctuary.
+	c.post("/places/new", "/places", url.Values{"kind": {"area"}, "parent_id": {"3"}, "name": {"Stairwell"}, "also_in": {"6", "3"}}, 200) // 10
+	if p, _ := st.GetPlace(10); !slices.Equal(p.AlsoIn, []int64{6}) {
+		t.Errorf("stairwell also in %v", p.AlsoIn)
+	}
+	if body := c.get("/places/6", 200); !strings.Contains(body, "Stairwell") || !strings.Contains(body, "Shared, lives in Main › 2nd floor › Stairwell") {
+		t.Error("the Sanctuary should list the shared stairwell")
+	}
+	if body := c.get("/places/10", 200); !strings.Contains(body, `Shared: also in <a href="/places/6">Main › Sanctuary</a>`) {
+		t.Error("the stairwell should say where else it is")
+	}
+	if body := c.get("/places/10/edit", 200); !strings.Contains(body, `name="also_in" value="6" checked`) || strings.Contains(body, `name="also_in" value="10"`) {
+		t.Error("edit form should tick the places it's also in, and not offer itself")
+	}
+	addPlaces(c, "area:10::Landing") // 11
+	if body := c.post("/places/10/edit", "/places/10", url.Values{"kind": {"area"}, "parent_id": {"3"}, "name": {"Stairwell"}, "also_in": {"11"}}, 422); !strings.Contains(body, "Landing is inside this area") {
+		t.Error("a shared area can't also be in something inside it")
+	}
+	c.post("/report", "/report", url.Values{"place_id": {"11"}, "title": {"Loose handrail"}}, 200)
+	if !strings.Contains(c.get("/places/6", 200), "Loose handrail") {
+		t.Error("problems in a shared area show in the places it's also in")
 	}
 
 	// Things inside a place show up on it.
@@ -865,7 +892,7 @@ func TestPlaces(t *testing.T) {
 	}
 
 	// Moving a place takes everything in it along.
-	body := c.post("/places/4/edit", "/places/4", url.Values{"kind": {"zone"}, "parent_id": {"2"}, "name": {"Classrooms"}, "tags": {"kids"}}, 200)
+	body := c.post("/places/4/edit", "/places/4", url.Values{"kind": {"area"}, "parent_id": {"2"}, "name": {"Classrooms"}, "tags": {"kids"}}, 200)
 	if !strings.Contains(body, "Moved, along with everything in it.") {
 		t.Error("moving a place should say so")
 	}
@@ -910,7 +937,7 @@ func TestPlaces(t *testing.T) {
 	if body := c.get("/buildings/7/qr", 200); strings.Count(body, `<svg class="qr"`) < 3 {
 		t.Error("/buildings/7/qr should print the building's codes")
 	}
-	if body := c.get("/report?room=9", 200); !strings.Contains(body, `value="5" data-path="Grace Church › Main › 201 – Nursery" data-level="4" selected>`) {
+	if body := c.get("/report?room=9", 200); !strings.Contains(body, `value="5" data-path="Grace Church › Main › 201 – Nursery" data-kind="room" selected>`) {
 		t.Error("old room QR codes should preselect the room")
 	}
 }

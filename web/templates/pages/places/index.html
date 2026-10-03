@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>Places</h1>
-    <p class="muted">Buildings and everything in them: floors, zones, rooms and areas.</p>
+    <p class="muted">Buildings and everything in them: floors, rooms and areas.</p>
   </div>
   <div class="page-head__actions">
     <a class="btn btn--primary" href="/places/new">Add a building</a>
@@ -22,6 +22,7 @@
         <div class="tree__main">
           <a href="/places/{{.ID}}"><strong>{{.Label}}</strong></a>
           <span class="kind">{{if and $.SingleSite (eq .Kind "site")}}Whole site{{else}}{{.KindLabel}}{{end}}</span>
+          {{if .Shared}}<span class="chip">shared with {{pluralize (len .AlsoIn) "other place"}}</span>{{end}}
           {{template "tag-chips" .Tags}}
         </div>
         <div class="tree__meta small">
@@ -33,11 +34,11 @@
       </li>
     {{end}}
   </ul>
-  <p class="hint">A place can sit inside any place higher up the list: site › building › floor › zone › room › area. Skip the levels you don't need, like a porch that's a zone right inside its building. Tags group places across buildings, like "classrooms".</p>
+  <p class="hint">Buildings go on a site. Floors, rooms and areas go in buildings, and can nest: rooms on floors, areas anywhere (a porch outside, a wing holding rooms, a stage in a room). A shared area, like a stairwell, can be in more than one place. Tags group places across buildings, like "classrooms".</p>
 {{else}}
   <div class="empty">
     <h2>No places yet</h2>
-    <p>Start with a building, e.g. "Sanctuary" or "Fellowship Hall". Then add its rooms, and floors or zones if they help.</p>
+    <p>Start with a building, e.g. "Sanctuary" or "Fellowship Hall". Then add its rooms, and floors or areas if they help.</p>
     <p><a class="btn btn--primary" href="/places/new">Add a building</a></p>
   </div>
 {{end}}

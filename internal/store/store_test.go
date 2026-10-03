@@ -91,11 +91,11 @@ func TestPlaceTree(t *testing.T) {
 	site := addPlace(t, s, nil, KindSite, "", "Grace Church")
 	main := addPlace(t, s, site, KindBuilding, "", "Main")
 	upstairs := addPlace(t, s, main, KindFloor, "", "2nd floor")
-	kids := addPlace(t, s, upstairs, KindZone, "", "Classrooms", "classrooms")
+	kids := addPlace(t, s, upstairs, KindArea, "", "Classrooms", "classrooms")
 	for _, r := range []Place{{Name: "Attic"}, {Number: "10", Name: "Office"}, {Number: " 9 ", Name: "Nursery"}} {
 		addPlace(t, s, kids, KindRoom, r.Number, r.Name)
 	}
-	porch := addPlace(t, s, main, KindZone, "", "Porch")
+	porch := addPlace(t, s, main, KindArea, "", "Porch")
 	booth := addPlace(t, s, addPlace(t, s, main, KindRoom, "", "Sanctuary", "media"), KindArea, "", "Sound booth", "Media")
 
 	tree, err := s.Places()
@@ -104,11 +104,11 @@ func TestPlaceTree(t *testing.T) {
 	for _, p := range tree.All() {
 		got = append(got, p.Path)
 	}
-	// One site is left out of paths; floors come before zones and rooms;
-	// numbered rooms come first, in number order.
+	// One site is left out of paths; floors come before rooms, rooms before
+	// areas; numbered rooms come first, in number order.
 	want := []string{"Grace Church", "Main", "Main › 2nd floor", "Main › 2nd floor › Classrooms",
 		"Main › 2nd floor › Classrooms › 9 – Nursery", "Main › 2nd floor › Classrooms › 10 – Office", "Main › 2nd floor › Classrooms › Attic",
-		"Main › Porch", "Main › Sanctuary", "Main › Sanctuary › Sound booth"}
+		"Main › Sanctuary", "Main › Sanctuary › Sound booth", "Main › Porch"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("paths =\n%q\nwant\n%q", got, want)
 	}
@@ -121,7 +121,8 @@ func TestPlaceTree(t *testing.T) {
 	if !tree.Within(booth.ID, main.ID) || tree.Within(main.ID, booth.ID) || !tree.Within(porch.ID, porch.ID) {
 		t.Error("Within is wrong")
 	}
-	if !tree.CanHold(main.ID, KindZone) || tree.CanHold(kids.ID, KindFloor) || tree.CanHold(0, KindBuilding) || !tree.CanHold(0, KindSite) {
+	if !tree.CanHold(main.ID, KindArea) || !tree.CanHold(kids.ID, KindFloor) || tree.CanHold(booth.ID, KindBuilding) || tree.CanHold(site.ID, KindRoom) ||
+		tree.CanHold(upstairs.ID, KindFloor) || tree.CanHold(0, KindBuilding) || !tree.CanHold(0, KindSite) || !tree.CanHold(site.ID, KindArea) {
 		t.Error("CanHold is wrong")
 	}
 	if tags := tree.Tags(); len(tags) != 2 || tags[0] != (TagCount{"classrooms", 1}) || tags[1] != (TagCount{"media", 2}) {
@@ -167,7 +168,7 @@ func TestParseTags(t *testing.T) {
 func TestDeletePlaceMovesThingsUp(t *testing.T) {
 	s := openTest(t)
 	main := building(t, s, "Main")
-	zone := addPlace(t, s, main, KindZone, "", "East wing", "kids")
+	zone := addPlace(t, s, main, KindArea, "", "East wing", "kids")
 	room := addPlace(t, s, zone, KindRoom, "", "Nursery")
 	item := &Item{PlaceID: zone.ID, Name: "Exit sign"}
 	must(t, s.SaveItem(item, nil, 0))
@@ -571,5 +572,106 @@ func TestMoveItem(t *testing.T) {
 	// A place that doesn't exist is refused.
 	if err := s.MoveItem(Move{ItemID: item.ID, PlaceID: 999, MovedOn: "2026-01-03"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestSharedArea: a stairwell that lives on the 1st floor and is also on
+// the 2nd floor and off two rooms.
+func TestSharedArea(t *testing.T) {
+	s := openTest(t)
+	main := building(t, s, "Main")
+	first, second := addPlace(t, s, main, KindFloor, "", "1st floor"), addPlace(t, s, main, KindFloor, "", "2nd floor")
+	roomA, roomB := addPlace(t, s, first, KindRoom, "", "A"), addPlace(t, s, second, KindRoom, "", "B")
+	stairs := &Place{ParentID: first.ID, Kind: KindArea, Name: "Stairwell", AlsoIn: []int64{second.ID, roomA.ID, roomB.ID, first.ID, second.ID}}
+	must(t, s.SavePlace(stairs))
+	item := &Item{PlaceID: stairs.ID, Name: "Stair lights", Quantity: 3}
+	must(t, s.SaveItem(item, nil, 0))
+	must(t, s.CreateProblem(&Problem{PlaceID: stairs.ID, Title: "Bulb out"}))
+
+	tree, err := s.Places()
+	must(t, err)
+	p, _ := tree.Get(stairs.ID)
+	// Its own place is never also a link; repeats collapse.
+	if p.Path != "Main › 1st floor › Stairwell" || len(p.AlsoIn) != 3 || !p.Shared() {
+		t.Fatalf("stairwell = %+v", p)
+	}
+	for _, in := range []*Place{first, second, roomA, roomB, main} {
+		if !tree.Within(stairs.ID, in.ID) {
+			t.Errorf("stairwell should be within %s", in.Name)
+		}
+		if items, _ := s.ListItems(ItemFilter{PlaceID: in.ID}); len(items) != 1 {
+			t.Errorf("items in %s = %d", in.Name, len(items))
+		}
+		if ps, _ := s.ListProblems(ProblemFilter{PlaceID: in.ID}); len(ps) != 1 {
+			t.Errorf("problems in %s = %d", in.Name, len(ps))
+		}
+		if got, _ := tree.Get(in.ID); got.ItemTotal != 1 || got.ProblemTotal != 1 {
+			t.Errorf("%s totals = %d items, %d problems; the stairwell should count once", in.Name, got.ItemTotal, got.ProblemTotal)
+		}
+	}
+	if kids := tree.Children(second.ID); len(kids) != 2 || kids[1].ID != stairs.ID || kids[1].ParentID != first.ID {
+		t.Errorf("2nd floor children = %+v", kids)
+	}
+	if len(tree.Inside(main.ID)) != 5 {
+		t.Errorf("inside main = %d places, want 5 (each once)", len(tree.Inside(main.ID)))
+	}
+
+	// Deleting a place it's only linked to drops the link.
+	must(t, s.DeletePlace(roomB.ID))
+	if got, _ := s.GetPlace(stairs.ID); len(got.AlsoIn) != 2 {
+		t.Errorf("after deleting B, also in %v", got.AlsoIn)
+	}
+	// Deleting its home moves it up; a link to where it lands goes away.
+	stairs.AlsoIn = []int64{second.ID, main.ID}
+	must(t, s.SavePlace(stairs))
+	must(t, s.DeletePlace(first.ID))
+	got, _ := s.GetPlace(stairs.ID)
+	if got.ParentID != main.ID || !slices.Equal(got.AlsoIn, []int64{second.ID}) {
+		t.Errorf("after deleting its floor: parent %d, also in %v", got.ParentID, got.AlsoIn)
+	}
+	// Turning it into a room drops the links: only areas are shared.
+	got.Kind = KindRoom
+	must(t, s.SavePlace(got))
+	if got, _ := s.GetPlace(stairs.ID); got.Shared() {
+		t.Errorf("a room can't be shared: %v", got.AlsoIn)
+	}
+}
+
+// TestDeleteStuck: a room in an area on the site has nowhere to go if the
+// area is deleted, since rooms don't go straight on a site.
+func TestDeleteStuck(t *testing.T) {
+	s := openTest(t)
+	site := addPlace(t, s, nil, KindSite, "", "Campus")
+	grounds := addPlace(t, s, site, KindArea, "", "Grounds")
+	addPlace(t, s, grounds, KindRoom, "", "Shed")
+	var stuck *StuckError
+	if err := s.DeletePlace(grounds.ID); !errors.As(err, &stuck) || stuck.Place.Name != "Shed" || stuck.Into.ID != site.ID {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := s.GetPlace(grounds.ID); err != nil {
+		t.Error("nothing should change when deleting gets stuck")
+	}
+}
+
+// TestZonesBecomeAreas upgrades a database that has zones.
+func TestZonesBecomeAreas(t *testing.T) {
+	s, err := openAt(filepath.Join(t.TempDir(), "v10.db"), 10)
+	must(t, err)
+	defer s.Close()
+	for _, q := range []string{
+		`INSERT INTO places (id, parent_id, kind, name) VALUES (1, NULL, 'site', 'Campus'), (2, 1, 'building', 'Main'), (3, 2, 'zone', 'East wing'), (4, 3, 'room', 'Nursery')`,
+		`INSERT INTO items (place_id, name) VALUES (3, 'Exit sign')`,
+	} {
+		if _, err := s.DB.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	must(t, s.migrate(0))
+	tree, _ := s.Places()
+	if p, _ := tree.Get(3); p.Kind != KindArea || p.Path != "Main › East wing" || p.ItemCount != 1 {
+		t.Errorf("east wing = %+v", p)
+	}
+	if p, _ := tree.Get(4); p.Path != "Main › East wing › Nursery" {
+		t.Errorf("nursery = %+v", p)
 	}
 }

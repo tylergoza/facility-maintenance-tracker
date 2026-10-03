@@ -31,13 +31,14 @@ export default class extends Controller {
     }
   }
 
-  // The kind radios on the place form: a place only fits inside a higher level.
+  // The kind radios on the place form: only offer places that can hold
+  // the chosen kind (each radio lists them in data-parents).
   kindChanged() {
     if (!this.hasPlaceTarget) return
     const kind = this.element.querySelector('input[name="kind"]:checked')
-    const level = kind ? Number(kind.dataset.level) : Infinity
+    const parents = kind ? kind.dataset.parents.split(" ") : null
     this.placeOptions().forEach((option) => {
-      option.dataset.tooLow = Number(option.dataset.level) >= level ? "1" : ""
+      option.dataset.cantHold = parents && !parents.includes(option.dataset.kind) ? "1" : ""
       this.refresh(option)
     })
     if (this.placeTarget.selectedOptions[0]?.disabled) this.placeTarget.value = ""
@@ -66,7 +67,7 @@ export default class extends Controller {
   }
 
   refresh(option) {
-    const off = option.dataset.narrowed === "1" || option.dataset.tooLow === "1"
+    const off = option.dataset.narrowed === "1" || option.dataset.cantHold === "1"
     option.hidden = off
     option.disabled = off
   }

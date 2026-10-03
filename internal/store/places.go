@@ -4,27 +4,53 @@ import (
 	"cmp"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
 
-// Place kinds, from the top of the tree down. A place always sits under a
-// higher level, but levels can be skipped: a porch is a zone straight
-// under its building, a closet off a hallway is a room in a zone.
+// Place kinds. Sites hold buildings; buildings hold floors, rooms and
+// areas. Areas are any other space: outside (a porch, the parking lot), a
+// wing or hallway holding floors or rooms, or part of a room (a stage).
 const (
 	KindSite     = "site"
 	KindBuilding = "building"
 	KindFloor    = "floor"
-	KindZone     = "zone"
 	KindRoom     = "room"
 	KindArea     = "area"
 )
 
-// PlaceKinds lists every kind, top level first.
-var PlaceKinds = []string{KindSite, KindBuilding, KindFloor, KindZone, KindRoom, KindArea}
+// PlaceKinds lists every kind, outermost first.
+var PlaceKinds = []string{KindSite, KindBuilding, KindFloor, KindRoom, KindArea}
 
-// KindLevel is 0 for a site up to 5 for an area; -1 for an unknown kind.
-func KindLevel(kind string) int { return slices.Index(PlaceKinds, kind) }
+// fitsIn lists the kinds each kind can go inside. Sites go at the top.
+var fitsIn = map[string][]string{
+	KindSite:     nil,
+	KindBuilding: {KindSite},
+	KindFloor:    {KindBuilding, KindArea},
+	KindRoom:     {KindBuilding, KindFloor, KindArea},
+	KindArea:     {KindSite, KindBuilding, KindFloor, KindRoom, KindArea},
+}
+
+// ValidKind reports whether kind is one of PlaceKinds.
+func ValidKind(kind string) bool { return slices.Contains(PlaceKinds, kind) }
+
+// KindFits reports whether a place of kind can go inside one of parentKind.
+func KindFits(parentKind, kind string) bool { return slices.Contains(fitsIn[kind], parentKind) }
+
+// ParentKinds are the kinds a place of this kind can go inside.
+func ParentKinds(kind string) []string { return fitsIn[kind] }
+
+// ChildKinds are the kinds that can go inside a place of this kind.
+func ChildKinds(kind string) []string {
+	var out []string
+	for _, k := range PlaceKinds {
+		if KindFits(kind, k) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
 
 // KindLabel renders a kind for people: "Building".
 func KindLabel(kind string) string {
@@ -38,42 +64,47 @@ func KindLabel(kind string) string {
 func KindHint(kind string) string {
 	switch kind {
 	case KindSite:
-		return "A property with its own address: the whole campus, its grounds, mailbox and parking lot."
+		return "A property with its own address: the whole campus, its grounds and parking lot."
 	case KindBuilding:
 		return "A building on the site."
 	case KindFloor:
-		return "A level of a building."
-	case KindZone:
-		return "A wing or group of rooms, or a space without walls: a hallway, a porch."
+		return "A level of a building, or of a wing."
 	case KindRoom:
 		return "A room with walls and a door."
 	case KindArea:
-		return "Part of a room: a stage, a sound booth, a closet inside a room."
+		return "Any other space: outside (a porch, a playground), a wing or hallway that holds rooms, or part of a room (a stage, a closet). A shared space like a stairwell can also be in more than one place."
 	}
 	return ""
 }
 
-// ChildKinds are the kinds that can go inside a place of this kind.
-func ChildKinds(kind string) []string {
-	if l := KindLevel(kind); l >= 0 {
-		return PlaceKinds[l+1:]
-	}
-	return nil
-}
+// kindRank orders siblings: floors, then rooms, then areas.
+var kindRank = map[string]int{KindSite: 0, KindBuilding: 1, KindFloor: 2, KindRoom: 3, KindArea: 4}
 
 // ErrPlaceNotEmpty is returned when deleting a site that still has
 // anything in it; there is nowhere above it to move things to.
 var ErrPlaceNotEmpty = errors.New("place is not empty")
 
+// StuckError is returned when deleting a place whose contents can't move
+// up a level, e.g. a room in an area on the site (rooms don't go on sites).
+type StuckError struct {
+	Place Place // what's inside
+	Into  Place // where it would have to go
+}
+
+func (e *StuckError) Error() string {
+	return fmt.Sprintf("%s (%s) can't go straight inside %s", e.Place.Label(), e.Place.Kind, e.Into.Label())
+}
+
 type Place struct {
 	ID       int64
-	ParentID int64 // 0 for sites
+	ParentID int64 // 0 for sites; for shared areas, the one it lives in
 	Kind     string
 	Number   string // optional, e.g. room "104"
 	Name     string
 	Address  string
 	Notes    string
 	Tags     []string
+	AlsoIn   []int64 // areas only: other places a shared area is in
 
 	// Filled in from the whole tree (see Places).
 	Path      string // "Main Building › 2nd floor › 104 – Nursery"
@@ -90,18 +121,22 @@ type Place struct {
 func (p Place) Label() string { return RoomLabel(p.Number, p.Name) }
 
 func (p Place) KindLabel() string    { return KindLabel(p.Kind) }
-func (p Place) Level() int           { return KindLevel(p.Kind) }
 func (p Place) ChildKinds() []string { return ChildKinds(p.Kind) }
+
+// Shared reports whether it's also in places other than its own.
+func (p Place) Shared() bool { return len(p.AlsoIn) > 0 }
 
 // TagList renders the tags for a form field: "classrooms, media".
 func (p Place) TagList() string { return strings.Join(p.Tags, ", ") }
 
 // Places is the whole tree, loaded at once: a site has tens or hundreds of
-// places, not millions.
+// places, not millions. Each place has one parent; shared areas are also
+// linked into other places.
 type Places struct {
 	list     []*Place // tree order, parents first
 	byID     map[int64]*Place
 	children map[int64][]*Place // by parent id; 0 holds the sites
+	linked   map[int64][]*Place // shared areas also in a place, by that place's id
 }
 
 type querier interface {
@@ -115,7 +150,7 @@ func loadPlaces(q querier) (*Places, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	t := &Places{byID: map[int64]*Place{}, children: map[int64][]*Place{}}
+	t := &Places{byID: map[int64]*Place{}, children: map[int64][]*Place{}, linked: map[int64][]*Place{}}
 	for rows.Next() {
 		p := &Place{}
 		if err := rows.Scan(&p.ID, &p.ParentID, &p.Kind, &p.Number, &p.Name, &p.Address, &p.Notes); err != nil {
@@ -126,10 +161,32 @@ func loadPlaces(q querier) (*Places, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	links, err := q.Query(`SELECT place_id, parent_id FROM place_links ORDER BY parent_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer links.Close()
+	for links.Next() {
+		var id, parent int64
+		if err := links.Scan(&id, &parent); err != nil {
+			return nil, err
+		}
+		if p, other := t.byID[id], t.byID[parent]; p != nil && other != nil {
+			p.AlsoIn = append(p.AlsoIn, parent)
+			t.linked[parent] = append(t.linked[parent], p)
+		}
+	}
+	if err := links.Err(); err != nil {
+		return nil, err
+	}
 	for _, p := range t.byID {
 		t.children[p.ParentID] = append(t.children[p.ParentID], p)
 	}
 	for _, kids := range t.children {
+		slices.SortFunc(kids, comparePlaces)
+	}
+	for _, kids := range t.linked {
 		slices.SortFunc(kids, comparePlaces)
 	}
 	// With one site, paths and lists start at its buildings.
@@ -160,11 +217,11 @@ func loadPlaces(q querier) (*Places, error) {
 	return t, nil
 }
 
-// comparePlaces orders siblings: higher levels first (floors before rooms),
-// then by number naturally (unnumbered last), then by name.
+// comparePlaces orders siblings: floors, then rooms, then areas; then by
+// number naturally (unnumbered last), then by name.
 func comparePlaces(a, b *Place) int {
 	return cmp.Or(
-		cmp.Compare(KindLevel(a.Kind), KindLevel(b.Kind)),
+		cmp.Compare(kindRank[a.Kind], kindRank[b.Kind]),
 		CompareRoomNumbers(a.Number, b.Number),
 		CompareRoomNumbers(a.Name, b.Name),
 		cmp.Compare(a.ID, b.ID),
@@ -224,16 +281,14 @@ func (s *Store) Places() (*Places, error) {
 			return nil, err
 		}
 	}
-	// Children come after their parents, so walking backwards adds each
-	// place's totals to its parent after its own are complete.
+	// Totals count everything inside once, even a shared area reachable
+	// two ways.
 	for _, p := range t.list {
-		p.ItemTotal, p.ProblemTotal, p.ChildCount = p.ItemCount, p.ProblemCount, len(t.children[p.ID])
-	}
-	for i := len(t.list) - 1; i >= 0; i-- {
-		p := t.list[i]
-		if parent := t.byID[p.ParentID]; parent != nil {
-			parent.ItemTotal += p.ItemTotal
-			parent.ProblemTotal += p.ProblemTotal
+		p.ItemTotal, p.ProblemTotal = p.ItemCount, p.ProblemCount
+		p.ChildCount = len(t.children[p.ID]) + len(t.linked[p.ID])
+		for _, in := range t.inside(p.ID) {
+			p.ItemTotal += in.ItemCount
+			p.ProblemTotal += in.ProblemCount
 		}
 	}
 	return t, nil
@@ -261,11 +316,27 @@ func (t *Places) All() []Place { return copyPlaces(t.list) }
 // Len is how many places there are.
 func (t *Places) Len() int { return len(t.list) }
 
-// Children returns the places directly inside a place (0 for the sites).
-func (t *Places) Children(id int64) []Place { return copyPlaces(t.children[id]) }
+// Children returns the places directly inside a place (0 for the sites):
+// its own, then shared areas that are also in it (their ParentID is
+// elsewhere).
+func (t *Places) Children(id int64) []Place {
+	return append(copyPlaces(t.children[id]), copyPlaces(t.linked[id])...)
+}
+
+// AlsoIn returns the other places a shared area is in.
+func (t *Places) AlsoIn(id int64) []Place {
+	var out []Place
+	if p := t.byID[id]; p != nil {
+		for _, other := range p.AlsoIn {
+			out = append(out, *t.byID[other])
+		}
+	}
+	slices.SortFunc(out, func(a, b Place) int { return cmp.Compare(a.Order, b.Order) })
+	return out
+}
 
 // Sites returns the top-level places.
-func (t *Places) Sites() []Place { return t.Children(0) }
+func (t *Places) Sites() []Place { return copyPlaces(t.children[0]) }
 
 // SingleSite returns the only site when there is exactly one. It's left
 // out of paths and lists, so a one-site setup never has to think about it.
@@ -285,8 +356,8 @@ func (t *Places) Top() []Place {
 	return t.Sites()
 }
 
-// Ancestors returns the places a place is inside, outermost first, leaving
-// out a single site.
+// Ancestors returns the places a place lives inside, outermost first,
+// leaving out a single site.
 func (t *Places) Ancestors(id int64) []Place {
 	var out []Place
 	single, _ := t.SingleSite()
@@ -301,25 +372,31 @@ func (t *Places) Ancestors(id int64) []Place {
 	return out
 }
 
-// Within reports whether id is the place outer or somewhere inside it.
-func (t *Places) Within(id, outer int64) bool {
-	for p := t.byID[id]; p != nil; p = t.byID[p.ParentID] {
-		if p.ID == outer {
-			return true
-		}
-	}
-	return false
-}
-
-// Lineage returns a place's id and those of every place it's inside, for
-// filtering lists in the browser.
-func (t *Places) Lineage(id int64) []int64 {
+// up returns a place and every place it's in, through shared links too.
+func (t *Places) up(id int64) []int64 {
 	var out []int64
-	for p := t.byID[id]; p != nil; p = t.byID[p.ParentID] {
+	seen := map[int64]bool{}
+	queue := []int64{id}
+	for len(queue) > 0 {
+		p := t.byID[queue[0]]
+		queue = queue[1:]
+		if p == nil || seen[p.ID] {
+			continue
+		}
+		seen[p.ID] = true
 		out = append(out, p.ID)
+		queue = append(append(queue, p.ParentID), p.AlsoIn...)
 	}
 	return out
 }
+
+// Within reports whether id is the place outer or somewhere inside it,
+// counting shared areas as inside every place they're in.
+func (t *Places) Within(id, outer int64) bool { return slices.Contains(t.up(id), outer) }
+
+// Lineage returns a place's id and those of every place it's in, for
+// filtering lists in the browser.
+func (t *Places) Lineage(id int64) []int64 { return t.up(id) }
 
 // Building returns the building a place is in (or is), or the site for
 // places outside any building.
@@ -339,19 +416,30 @@ func (t *Places) Building(id int64) (Place, bool) {
 	return Place{}, false
 }
 
-// Inside returns everything inside a place, in tree order, not including it.
-func (t *Places) Inside(id int64) []Place {
-	var out []Place
+// inside returns everything inside a place, each once, in tree order, not
+// including it.
+func (t *Places) inside(id int64) []*Place {
+	var out []*Place
+	seen := map[int64]bool{id: true}
 	var walk func(int64)
 	walk = func(parent int64) {
-		for _, p := range t.children[parent] {
-			out = append(out, *p)
-			walk(p.ID)
+		for _, kids := range [][]*Place{t.children[parent], t.linked[parent]} {
+			for _, p := range kids {
+				if !seen[p.ID] {
+					seen[p.ID] = true
+					out = append(out, p)
+					walk(p.ID)
+				}
+			}
 		}
 	}
 	walk(id)
+	slices.SortFunc(out, func(a, b *Place) int { return cmp.Compare(a.Order, b.Order) })
 	return out
 }
+
+// Inside returns everything inside a place, in tree order, not including it.
+func (t *Places) Inside(id int64) []Place { return copyPlaces(t.inside(id)) }
 
 // Tagged returns places with a tag, in tree order.
 func (t *Places) Tagged(tag string) []Place {
@@ -388,17 +476,16 @@ func (t *Places) Tags() []TagCount {
 }
 
 // CanHold reports whether a place of kind can go inside parent (0 = at
-// the top). Only sites go at the top, and everything else goes inside a
-// higher level.
+// the top, which only sites can).
 func (t *Places) CanHold(parent int64, kind string) bool {
-	if KindLevel(kind) < 0 {
+	if !ValidKind(kind) {
 		return false
 	}
 	if parent == 0 {
 		return kind == KindSite
 	}
 	p := t.byID[parent]
-	return p != nil && p.Level() < KindLevel(kind)
+	return p != nil && KindFits(p.Kind, kind)
 }
 
 func copyPlaces(ps []*Place) []Place {
@@ -468,6 +555,19 @@ func savePlaceTx(tx *sql.Tx, p *Place) error {
 	} else if _, err := tx.Exec(`UPDATE places SET parent_id = ?, kind = ?, number = ?, name = ?, address = ?, notes = ? WHERE id = ?`, append(args, p.ID)...); err != nil {
 		return err
 	}
+	// Only areas can be shared, and never with the place they live in.
+	if _, err := tx.Exec(`DELETE FROM place_links WHERE place_id = ?`, p.ID); err != nil {
+		return err
+	}
+	if p.Kind != KindArea {
+		p.AlsoIn = nil
+	}
+	p.AlsoIn = slices.DeleteFunc(slices.Compact(slices.Sorted(slices.Values(p.AlsoIn))), func(id int64) bool { return id == p.ParentID || id == p.ID })
+	for _, other := range p.AlsoIn {
+		if _, err := tx.Exec(`INSERT INTO place_links (place_id, parent_id) VALUES (?, ?)`, p.ID, other); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM place_tags WHERE place_id = ?`, p.ID); err != nil {
 		return err
 	}
@@ -496,9 +596,12 @@ func ParseTags(s string) []string {
 	return out
 }
 
-// DeletePlace removes a place. Whatever was inside it (places, items,
-// supplies, problems) moves up to the place it was in. A site has nothing
-// above it, so it can only be deleted once it's empty.
+// DeletePlace removes a place. Whatever lived inside it (places, items,
+// supplies, problems) moves up to the place it was in; shared areas that
+// were only linked to it just lose the link. A site has nothing above it,
+// so it can only be deleted once it's empty. If something inside can't go
+// in the place above (a room in an area on the site), it returns a
+// *StuckError and changes nothing.
 func (s *Store) DeletePlace(id int64) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -519,6 +622,21 @@ func (s *Store) DeletePlace(id int64) error {
 			return ErrPlaceNotEmpty
 		}
 	} else {
+		t, err := loadPlaces(tx)
+		if err != nil {
+			return err
+		}
+		into, _ := t.Get(parent)
+		for _, child := range t.children[id] {
+			if !KindFits(into.Kind, child.Kind) {
+				return &StuckError{Place: *child, Into: into}
+			}
+		}
+		// A shared area moving up into a place it was also linked to now
+		// just lives there.
+		if _, err := tx.Exec(`DELETE FROM place_links WHERE parent_id = ? AND place_id IN (SELECT id FROM places WHERE parent_id = ?)`, parent, id); err != nil {
+			return err
+		}
 		for _, q := range []string{
 			`UPDATE places SET parent_id = ? WHERE parent_id = ?`,
 			`UPDATE items SET place_id = ? WHERE place_id = ?`,
@@ -589,10 +707,14 @@ func (s *Store) LegacyPlace(buildingID, roomID int64) (int64, error) {
 
 // SQL helpers ----------------------------------------------------------------
 
+// placeEdges is every "is inside" link: each place's own parent, and the
+// other places shared areas are in.
+const placeEdges = `(SELECT id AS child, parent_id AS parent FROM places UNION ALL SELECT place_id, parent_id FROM place_links)`
+
 // inPlace is SQL matching col to a place (the next argument) or anything
-// inside it.
+// inside it, shared areas included.
 func inPlace(col string) string {
-	return col + ` IN (WITH RECURSIVE sub(id) AS (SELECT ? UNION SELECT p.id FROM places p JOIN sub ON p.parent_id = sub.id) SELECT id FROM sub)`
+	return col + ` IN (WITH RECURSIVE sub(id) AS (SELECT ? UNION SELECT e.child FROM ` + placeEdges + ` e JOIN sub ON e.parent = sub.id) SELECT id FROM sub)`
 }
 
 // inTag is SQL matching col to places with a tag (the next argument) or
@@ -600,7 +722,7 @@ func inPlace(col string) string {
 func inTag(col string) string {
 	return col + ` IN (WITH RECURSIVE sub(id) AS (
 		SELECT pt.place_id FROM place_tags pt JOIN tags t ON t.id = pt.tag_id WHERE t.name = ?
-		UNION SELECT p.id FROM places p JOIN sub ON p.parent_id = sub.id) SELECT id FROM sub)`
+		UNION SELECT e.child FROM ` + placeEdges + ` e JOIN sub ON e.parent = sub.id) SELECT id FROM sub)`
 }
 
 // placeFilter adds "in this place" or "in places with this tag" to a

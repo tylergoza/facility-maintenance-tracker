@@ -8,21 +8,32 @@
     <fieldset class="fieldset">
       <legend>What is it?</legend>
       <div class="segmented" role="radiogroup" aria-label="Kind of place">
-        {{range .Kinds}}<label><input type="radio" name="kind" value="{{.}}" data-level="{{kindLevel .}}" {{if eq . $.Form.Kind}}checked{{end}}> {{kindLabel .}}</label>{{end}}
+        {{range .Kinds}}<label><input type="radio" name="kind" value="{{.}}" data-parents="{{parentKinds .}}" {{if eq . $.Form.Kind}}checked{{end}}> {{kindLabel .}}</label>{{end}}
       </div>
       {{range .Kinds}}<p class="hint" data-reveal-target="section" data-reveal-when="kind={{.}}">{{kindHint .}}</p>{{end}}
     </fieldset>
     {{if not .Empty}}
-      <div data-reveal-target="section" data-reveal-when="kind=building kind=floor kind=zone kind=room kind=area">
+      <div data-reveal-target="section" data-reveal-when="kind=building kind=floor kind=room kind=area">
         {{template "place-select" (dict "Name" "parent_id" "Places" .Parents "Selected" .Form.ParentID "Label" "Inside" "Required" true "Blank" "Choose…")}}
       </div>
+      <details class="fieldset also-in" data-reveal-target="section" data-reveal-when="kind=area" {{if .Form.AlsoIn}}open{{end}}>
+        <summary>Also in other places <span class="optional">optional</span></summary>
+        <p class="hint">For a shared space, like a stairwell between two floors or a balcony off two rooms. It shows up in each place you tick, and its problems and items count there too. It keeps its name from the place above.</p>
+        <div class="also-in__list">
+          {{range .Parents}}
+            <label class="check also-in__row tree__row--d{{.Depth}}">
+              <input type="checkbox" name="also_in" value="{{.ID}}" {{if hasID $.Form.AlsoIn .ID}}checked{{end}}> {{.Label}}
+            </label>
+          {{end}}
+        </div>
+      </details>
     {{end}}
     <div class="field-row">
       <div class="field">
         <label for="name">Name</label>
-        <input id="name" name="name" value="{{.Form.Name}}" required autofocus maxlength="100" placeholder="e.g. Sanctuary, 2nd floor, East wing, Nursery, Stage">
+        <input id="name" name="name" value="{{.Form.Name}}" required autofocus maxlength="100" placeholder="e.g. Sanctuary, 2nd floor, Nursery, East wing, Stairwell">
       </div>
-      <div class="field field--narrow" data-reveal-target="section" data-reveal-when="kind=building kind=floor kind=zone kind=room kind=area">
+      <div class="field field--narrow" data-reveal-target="section" data-reveal-when="kind=building kind=floor kind=room kind=area">
         <label for="number">Number <span class="optional">optional</span></label>
         <input id="number" name="number" value="{{.Form.Number}}" maxlength="20" placeholder="e.g. 104">
       </div>

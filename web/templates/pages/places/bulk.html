@@ -11,7 +11,7 @@
     <fieldset class="fieldset">
       <legend>They're all</legend>
       <div class="segmented" role="radiogroup" aria-label="Kind of place">
-        {{range .Kinds}}<label><input type="radio" name="kind" value="{{.}}" data-level="{{kindLevel .}}" {{if eq . $.Form.Kind}}checked{{end}}> {{kindLabel .}}s</label>{{end}}
+        {{range .Kinds}}<label><input type="radio" name="kind" value="{{.}}" data-parents="{{parentKinds .}}" {{if eq . $.Form.Kind}}checked{{end}}> {{kindLabel .}}s</label>{{end}}
       </div>
     </fieldset>
     <div class="field">

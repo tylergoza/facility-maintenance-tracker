@@ -27,6 +27,7 @@ func seedDemo(st *store.Store) error {
 	type room struct {
 		kind, number, name, in string
 		tags                   []string
+		alsoIn                 []string // shared areas: other places it's in
 	}
 	type building struct {
 		name, address string
@@ -42,7 +43,8 @@ func seedDemo(st *store.Store) error {
 		{"Sanctuary", "100 Church St", []room{
 			floor("Basement"), floor("1st floor"), floor("Balcony"),
 			in("1st floor", "100", "Worship Hall"), in("1st floor", "104", "Nursery", "kids"), in("Basement", "B1", "Boiler Room"),
-			in("Balcony", "201", "Sound Booth", "media"), {kind: store.KindZone, name: "Front porch"},
+			in("Balcony", "201", "Sound Booth", "media"), {kind: store.KindArea, name: "Front porch"},
+			{kind: store.KindArea, name: "Stairwell", in: "1st floor", alsoIn: []string{"Balcony"}},
 		}, []item{
 			{"Furnace (north)", "HVAC", "Boiler Room", []task{{"Replace air filter", "months", 3, -12, 102}, {"Annual service & inspection", "years", 1, 45, 320}}},
 			{"Water heater", "Plumbing", "Boiler Room", []task{{"Flush tank", "years", 1, 9, 356}}},
@@ -53,7 +55,7 @@ func seedDemo(st *store.Store) error {
 			{"Fire extinguishers", "Safety", "", []task{{"Annual certification", "years", 1, 120, 245}}},
 		}},
 		{"Fellowship Hall", "100 Church St (rear)", []room{
-			in("", "110", "Kitchen"), {kind: store.KindZone, name: "Classrooms", tags: []string{"kids"}},
+			in("", "110", "Kitchen"), {kind: store.KindArea, name: "Classrooms", tags: []string{"kids"}},
 			in("Classrooms", "112", "Classroom 1"), in("Classrooms", "114", "Classroom 2"),
 		}, []item{
 			{"Commercial range hood", "Kitchen", "Kitchen", []task{{"Clean grease filters", "months", 3, 25, 65}, {"Fire suppression inspection", "months", 6, -30, 210}}},
@@ -100,6 +102,7 @@ func seedDemo(st *store.Store) error {
 			{"Electrical outlets", "Electrical", "Worship Hall", 12, "", 0, false},
 			{"Exit signs", "Safety", "Worship Hall", 2, "", 0, false},
 			{"Porch lights", "Lighting", "Front porch", 4, "Light bulbs (LED A19)", 1, false},
+			{"Stair lights", "Lighting", "Stairwell", 3, "Light bulbs (LED A19)", 1, false},
 			{"Ceiling cans", "Lighting", "Nursery", 6, "LED BR30 bulbs", 1, false},
 			{"Electrical outlets", "Electrical", "Nursery", 6, "", 0, false},
 			{"Light switches", "Electrical", "Nursery", 2, "", 0, false},
@@ -155,6 +158,9 @@ func seedDemo(st *store.Store) error {
 		rooms := map[string]int64{"": b.ID}
 		for _, rn := range bd.rooms {
 			r := &store.Place{ParentID: rooms[rn.in], Kind: rn.kind, Number: rn.number, Name: rn.name, Tags: rn.tags}
+			for _, other := range rn.alsoIn {
+				r.AlsoIn = append(r.AlsoIn, rooms[other])
+			}
 			if err := st.SavePlace(r); err != nil {
 				return err
 			}

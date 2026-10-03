@@ -445,6 +445,14 @@ select:disabled { opacity: .6; }
 a.chip:hover { border-color: var(--primary); }
 .chip--lg { font-size: 1rem; padding: 2px 14px; vertical-align: middle; }
 .place-filter { margin-bottom: 6px; }
+.also-in summary { cursor: pointer; font-weight: 600; }
+.also-in__list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 0; }
+.also-in__row { display: flex; padding: 4px 10px; }
+.also-in__row.tree__row--d1 { padding-left: 34px; }
+.also-in__row.tree__row--d2 { padding-left: 58px; }
+.also-in__row.tree__row--d3 { padding-left: 82px; }
+.also-in__row.tree__row--d4 { padding-left: 106px; }
+.also-in__row.tree__row--d5 { padding-left: 130px; }
 @media (max-width: 640px) {
   .tree__row--d1 { padding-left: 26px; }
   .tree__row--d2 { padding-left: 38px; }

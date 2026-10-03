@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
@@ -90,14 +91,10 @@ func (s *Server) renderPlaceForm(w http.ResponseWriter, r *http.Request, status 
 // defaultKind is what most often goes inside a place of this kind.
 func defaultKind(parent string) string {
 	switch parent {
-	case "":
-		return store.KindBuilding
-	case store.KindSite:
+	case "", store.KindSite:
 		return store.KindBuilding
 	case store.KindRoom:
 		return store.KindArea
-	case store.KindArea:
-		return ""
 	}
 	return store.KindRoom
 }
@@ -114,6 +111,14 @@ func (s *Server) placeFromForm(r *http.Request, f *placeForm) []string {
 		f.Number = ""
 	}
 	f.Tags = store.ParseTags(f.TagText)
+	f.AlsoIn = nil
+	if f.Kind == store.KindArea {
+		for _, v := range r.PostForm["also_in"] {
+			if id, err := strconv.ParseInt(v, 10, 64); err == nil && id != f.ParentID {
+				f.AlsoIn = append(f.AlsoIn, id)
+			}
+		}
+	}
 	var errs []string
 	if f.Name == "" {
 		errs = append(errs, "Name is required.")
@@ -129,12 +134,13 @@ func (s *Server) placeFromForm(r *http.Request, f *placeForm) []string {
 	return append(errs, s.checkPlacement(&f.Place)...)
 }
 
-// checkPlacement checks a place's kind and parent against the tree rules:
-// only sites at the top, everything else inside a higher level, and
-// anything already inside it still at a lower level. A building with no
-// parent goes on the only site (created if there are none yet).
+// checkPlacement checks a place's kind and parents against the tree rules
+// (see store.KindFits): it must fit where it goes, what's already inside
+// it must still fit in it, and nothing can end up inside itself. A
+// building with no parent goes on the only site (created if there are none
+// yet).
 func (s *Server) checkPlacement(p *store.Place) []string {
-	if store.KindLevel(p.Kind) < 0 {
+	if !store.ValidKind(p.Kind) {
 		return []string{"Choose what kind of place it is."}
 	}
 	if p.Kind == store.KindSite {
@@ -155,15 +161,54 @@ func (s *Server) checkPlacement(p *store.Place) []string {
 		errs = append(errs, "A place can't go inside itself.")
 	} else if !tree.CanHold(p.ParentID, p.Kind) {
 		parent, _ := tree.Get(p.ParentID)
-		errs = append(errs, fmt.Sprintf("A %s can't go inside %s. Pick a place higher up, or a different kind.", p.Kind, aKind(parent.Kind)))
+		errs = append(errs, fmt.Sprintf("%s can't go inside %s. %s", capFirst(aKind(p.Kind)), aKind(parent.Kind), fitsHint(p.Kind)))
 	}
-	for _, child := range tree.Children(p.ID) {
-		if p.ID != 0 && child.Level() <= p.Level() {
-			errs = append(errs, fmt.Sprintf("%s (%s) is inside it, so it can't be %s. Move what's inside first.", child.Label(), aKind(child.Kind), aKind(p.Kind)))
-			break
+	for _, other := range p.AlsoIn {
+		place, ok := tree.Get(other)
+		switch {
+		case !ok:
+			errs = append(errs, "One of the other places it's in no longer exists.")
+		case p.ID != 0 && tree.Within(other, p.ID):
+			errs = append(errs, fmt.Sprintf("%s is inside this area, so the area can't also be in it.", place.Label()))
+		case !store.KindFits(place.Kind, p.Kind):
+			errs = append(errs, fmt.Sprintf("%s can't go inside %s.", capFirst(aKind(p.Kind)), aKind(place.Kind)))
+		}
+	}
+	if p.ID != 0 {
+		for _, child := range tree.Children(p.ID) {
+			if !store.KindFits(p.Kind, child.Kind) {
+				errs = append(errs, fmt.Sprintf("%s (%s) is inside it, and %s can't hold %s. Move what's inside first.",
+					child.Label(), aKind(child.Kind), aKind(p.Kind), aKind(child.Kind)))
+				break
+			}
 		}
 	}
 	return errs
+}
+
+// fitsHint says where a kind of place can go: "It can go inside a
+// building, floor or area."
+func fitsHint(kind string) string {
+	parents := store.ParentKinds(kind)
+	if len(parents) == 0 {
+		return ""
+	}
+	list := parents[0]
+	for i, k := range parents[1:] {
+		if i == len(parents)-2 {
+			list += " or " + k
+		} else {
+			list += ", " + k
+		}
+	}
+	return "It can go inside " + aKind(list) + "."
+}
+
+func capFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // aKind renders "a room" or "an area".
@@ -238,7 +283,7 @@ func (s *Server) handlePlaceShow(w http.ResponseWriter, r *http.Request) {
 		parent, _ = tree.Get(p.ParentID)
 	}
 	s.render(w, r, http.StatusOK, "places/show", map[string]any{
-		"Title": p.Label(), "Place": p, "Parent": parent, "Crumbs": tree.Ancestors(p.ID), "Children": tree.Children(p.ID),
+		"Title": p.Label(), "Place": p, "Parent": parent, "Crumbs": tree.Ancestors(p.ID), "Children": tree.Children(p.ID), "AlsoIn": tree.AlsoIn(p.ID),
 		"Items": items, "ItemGroups": groupItems(items), "AllItems": all, "Supplies": supplies, "Problems": problems,
 		"Tasks": s.groupTasks(tasks), "SupplyLocations": len(tree.Inside(p.ID)) > 0,
 	})
@@ -282,7 +327,13 @@ func (s *Server) handlePlaceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.DeletePlace(p.ID)
-	if errors.Is(err, store.ErrPlaceNotEmpty) {
+	var stuck *store.StuckError
+	if errors.As(err, &stuck) {
+		s.setFlash(w, r, "error", fmt.Sprintf("%s can't be deleted yet: %s (%s) is inside it and can't go straight inside %s. Move %s first.",
+			p.Label(), stuck.Place.Label(), aKind(stuck.Place.Kind), stuck.Into.Label(), stuck.Place.Label()))
+		http.Redirect(w, r, fmt.Sprintf("/places/%d", p.ID), http.StatusSeeOther)
+		return
+	} else if errors.Is(err, store.ErrPlaceNotEmpty) {
 		s.setFlash(w, r, "error", p.Label()+" still has things in it. Move or delete them first.")
 		http.Redirect(w, r, fmt.Sprintf("/places/%d", p.ID), http.StatusSeeOther)
 		return
@@ -312,14 +363,8 @@ func (s *Server) renderBulkForm(w http.ResponseWriter, r *http.Request, status i
 		s.serverError(w, r, err)
 		return
 	}
-	var parents []store.Place
-	for _, p := range tree.All() {
-		if p.Kind != store.KindArea {
-			parents = append(parents, p)
-		}
-	}
 	s.render(w, r, status, "places/bulk", map[string]any{
-		"Title": "Add several places", "Form": f, "Parents": parents, "Kinds": store.PlaceKinds[1:], "Errors": errs,
+		"Title": "Add several places", "Form": f, "Parents": tree.All(), "Kinds": store.PlaceKinds[1:], "Errors": errs,
 	})
 }
 
@@ -433,12 +478,14 @@ func itemOptions(tree *store.Places, items []store.Item) []itemOption {
 	return out
 }
 
-// filterPlaces are the places offered to narrow a list or dashboard. Rooms
-// and areas are left out when short is set to keep the list manageable.
+// filterPlaces are the places offered to narrow a list or dashboard. When
+// short is set, rooms and the areas inside them are left out to keep the
+// list manageable.
 func filterPlaces(tree *store.Places, short bool) []store.Place {
 	var out []store.Place
 	for _, p := range tree.All() {
-		if !short || p.Level() <= store.KindLevel(store.KindZone) {
+		parent, _ := tree.Get(p.ParentID)
+		if !short || p.Kind != store.KindRoom && !(p.Kind == store.KindArea && (parent.Kind == store.KindRoom || parent.Kind == store.KindArea)) {
 			out = append(out, p)
 		}
 	}

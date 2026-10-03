@@ -310,7 +310,7 @@
     {{end}}
     <select id="{{.Name}}" name="{{.Name}}" {{if .Required}}required{{end}} data-place-picker-target="place" data-action="place-picker#placeChanged">
       {{if .Blank}}<option value="">{{.Blank}}</option>{{end}}
-      {{range .Places}}<option value="{{.ID}}" data-path="{{.Path}}" data-level="{{.Level}}" {{if eq .ID $.Selected}}selected{{end}}>{{indent .Depth}}{{.Label}}{{if eq .Kind "site"}} (whole site){{end}}</option>{{end}}
+      {{range .Places}}<option value="{{.ID}}" data-path="{{.Path}}" data-kind="{{.Kind}}" {{if eq .ID $.Selected}}selected{{end}}>{{indent .Depth}}{{.Label}}{{if eq .Kind "site"}} (whole site){{end}}</option>{{end}}
     </select>
   </div>
 {{end}}
