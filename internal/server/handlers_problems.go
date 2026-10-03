@@ -33,26 +33,38 @@ func (s *Server) absURL(r *http.Request, path string) string {
 
 // Reporting ----------------------------------------------------------------
 
-func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, errs []string) {
+// problemFormData loads what the report and edit forms pick from:
+// buildings, rooms, and items (filtered to the chosen room in the browser).
+func (s *Server) problemFormData() (map[string]any, error) {
 	buildings, err := s.store.ListBuildings()
 	if err != nil {
-		s.serverError(w, r, err)
-		return
+		return nil, err
 	}
 	rooms, err := s.store.ListRooms(0)
 	if err != nil {
+		return nil, err
+	}
+	items, err := s.store.ListItems(store.ItemFilter{})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"Buildings": buildings, "Rooms": rooms, "Items": items}, nil
+}
+
+func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, errs []string) {
+	data, err := s.problemFormData()
+	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, status, "problems/report", map[string]any{
-		"Title": "Report a problem", "Form": p, "Buildings": buildings, "Rooms": rooms, "Errors": errs,
-	})
+	data["Title"], data["Form"], data["Errors"] = "Report a problem", p, errs
+	s.render(w, r, status, "problems/report", data)
 }
 
 // problemFromForm reads what and where. Reporter fields are only read for
 // people who aren't signed in.
 func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter bool) []string {
-	p.BuildingID, p.RoomID = formInt(r, "building_id"), formInt(r, "room_id")
+	p.BuildingID, p.RoomID, p.ItemID = formInt(r, "building_id"), formInt(r, "room_id"), formInt(r, "item_id")
 	p.Title, p.Details = formStr(r, "title"), formStr(r, "details")
 	var errs []string
 	if _, err := s.store.GetBuilding(p.BuildingID); err != nil {
@@ -76,10 +88,13 @@ func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter boo
 	}
 	if p.ItemID != 0 {
 		item, err := s.store.GetItem(p.ItemID)
-		if err != nil || item.BuildingID != p.BuildingID {
-			errs = append(errs, "The item is not in the selected building.")
-		} else {
-			p.ItemName = item.Name
+		switch {
+		case err != nil || item.BuildingID != p.BuildingID:
+			errs = append(errs, "That item is not in the selected building.")
+		case p.RoomID != 0 && item.RoomID != p.RoomID:
+			errs = append(errs, "That item is not in the selected room.")
+		default:
+			p.ItemName, p.RoomID = item.Name, item.RoomID
 		}
 	}
 	return errs
@@ -97,11 +112,8 @@ func (s *Server) handleReportForm(w http.ResponseWriter, r *http.Request) {
 	if room, err := s.store.GetRoom(p.RoomID); err == nil {
 		p.BuildingID = room.BuildingID
 	}
-	// Item links are only on signed-in pages, so only they can preset one.
-	if currentUser(r) != nil {
-		if item, err := s.store.GetItem(queryInt(r, "item")); err == nil {
-			p.ItemID, p.ItemName, p.BuildingID, p.RoomID = item.ID, item.Name, item.BuildingID, item.RoomID
-		}
+	if item, err := s.store.GetItem(queryInt(r, "item")); err == nil {
+		p.ItemID, p.ItemName, p.BuildingID, p.RoomID = item.ID, item.Name, item.BuildingID, item.RoomID
 	}
 	s.renderReportForm(w, r, http.StatusOK, p, nil)
 }
@@ -109,9 +121,6 @@ func (s *Server) handleReportForm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	var p store.Problem
-	if user != nil {
-		p.ItemID = formInt(r, "item_id")
-	}
 	errs := s.problemFromForm(r, &p, user == nil)
 	if user != nil {
 		p.ReportedBy, p.ReporterName = user.ID, user.Name()
@@ -190,25 +199,31 @@ func (s *Server) handleProblemShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "problems/show", map[string]any{
-		"Title": p.Title, "Problem": p, "Updates": updates, "Users": users, "Statuses": store.ProblemStatuses,
-	})
+	data := map[string]any{"Title": p.Title, "Problem": p, "Updates": updates, "Users": users, "Statuses": store.ProblemStatuses}
+	if p.ItemID != 0 {
+		item, err := s.store.GetItem(p.ItemID)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		units, err := s.itemUnits(item)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		data["Item"], data["Units"] = item, units
+	}
+	s.render(w, r, http.StatusOK, "problems/show", data)
 }
 
 func (s *Server) renderProblemForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, errs []string) {
-	buildings, err := s.store.ListBuildings()
+	data, err := s.problemFormData()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	rooms, err := s.store.ListRooms(0)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	s.render(w, r, status, "problems/form", map[string]any{
-		"Title": "Edit problem", "Form": p, "Buildings": buildings, "Rooms": rooms, "Errors": errs,
-	})
+	data["Title"], data["Form"], data["Errors"] = "Edit problem", p, errs
+	s.render(w, r, status, "problems/form", data)
 }
 
 func (s *Server) handleProblemEdit(w http.ResponseWriter, r *http.Request) {
@@ -225,9 +240,6 @@ func (s *Server) handleProblemSave(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.serverError(w, r, err)
 		return
-	}
-	if r.PostFormValue("unlink_item") == "1" {
-		p.ItemID, p.ItemName = 0, ""
 	}
 	if errs := s.problemFromForm(r, p, true); errs != nil {
 		s.renderProblemForm(w, r, http.StatusUnprocessableEntity, *p, errs)
@@ -286,6 +298,31 @@ func (s *Server) handleProblemUpdate(w http.ResponseWriter, r *http.Request) {
 		msg = "Marked resolved."
 	case c.AssignedTo == currentUser(r).ID && p.AssignedTo != c.AssignedTo:
 		msg = "It's yours. Thanks for taking it on."
+	}
+	s.redirect(w, r, to, msg)
+}
+
+// handleProblemUnit records which of the item's units the problem is about.
+func (s *Server) handleProblemUnit(w http.ResponseWriter, r *http.Request) {
+	p, err := s.store.GetProblem(pathID(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	to := fmt.Sprintf("/problems/%d", p.ID)
+	unit := int(formInt(r, "unit"))
+	if p.ItemID == 0 || unit < 0 || unit > p.ItemQuantity {
+		s.setFlash(w, r, "error", "Choose one of the item's numbers.")
+		http.Redirect(w, r, to, http.StatusSeeOther)
+		return
+	}
+	if err := s.store.SetProblemUnit(p.ID, unit, currentUser(r).ID); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	msg := "Cleared which one."
+	if unit != 0 {
+		msg = fmt.Sprintf("Noted: it's #%d.", unit)
 	}
 	s.redirect(w, r, to, msg)
 }

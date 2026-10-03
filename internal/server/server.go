@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -183,6 +184,8 @@ func (s *Server) funcs() template.FuncMap {
 		"pluralize":          pluralize,
 		"roomLabel":          store.RoomLabel,
 		"problemStatusLabel": store.ProblemStatusLabel,
+		"hasInt":             slices.Contains[[]int, int],
+		"unitsLabel":         store.UnitsLabel,
 		"lines":              func(t string) []string { return strings.Split(strings.TrimSpace(t), "\n") },
 	}
 }

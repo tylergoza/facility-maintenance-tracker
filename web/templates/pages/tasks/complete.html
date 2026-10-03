@@ -14,7 +14,7 @@
   {{if $t.Description}}<div class="notes">{{range lines $t.Description}}<p>{{.}}</p>{{end}}</div>{{end}}
   {{template "errors" .Errors}}
   <form method="post" action="/tasks/{{$t.ID}}/complete" class="form"
-        data-controller="next-due"
+        data-controller="next-due unit-count" data-unit-count-per-value="{{.UnitSupplyPer}}"
         data-next-due-interval-value-value="{{$t.IntervalValue}}"
         data-next-due-interval-unit-value="{{$t.IntervalUnit}}"
         data-next-due-last-value="{{$t.LastCompletedOn}}">
@@ -31,6 +31,7 @@
         <input id="performed_by" name="performed_by" value="{{.Form.PerformedBy}}" placeholder="Name or company">
       </div>
     </div>
+    {{template "unit-picker" (dict "Units" .Units "Selected" .Form.Units)}}
     {{if $t.SupplyID}}
       <fieldset class="fieldset" data-controller="reveal" data-action="change->reveal#update">
         <legend>Supplies</legend>
@@ -45,7 +46,7 @@
         </label>
         <div class="field field--narrow" data-reveal-target="section" data-reveal-when="took_supply=1">
           <label for="supply_amount">How many</label>
-          <input id="supply_amount" name="supply_amount" type="number" min="1" step="1" inputmode="numeric" value="{{or .Form.SupplyAmount $t.SupplyAmount}}">
+          <input id="supply_amount" name="supply_amount" type="number" min="1" step="1" inputmode="numeric" value="{{or .Form.SupplyAmount $t.SupplyAmount}}" data-unit-count-target="amount">
         </div>
         {{if $t.SupplyShort}}<p class="hint">Not enough on hand. Leave this unticked if it came from somewhere else, or <a href="/supplies/{{$t.SupplyID}}">restock it</a> first.</p>{{end}}
       </fieldset>

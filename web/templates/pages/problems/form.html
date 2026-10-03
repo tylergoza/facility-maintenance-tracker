@@ -18,15 +18,19 @@
       </div>
       <div class="field">
         <label for="room_id">Room <span class="optional">optional</span></label>
-        <select id="room_id" name="room_id" data-room-select-target="room">
+        <select id="room_id" name="room_id" data-room-select-target="room" data-action="room-select#filterItems">
           <option value="">— Not in a room —</option>
           {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
         </select>
       </div>
     </div>
-    {{if .Form.ItemID}}
-      <label class="check"><input type="checkbox" name="unlink_item" value="1"> Not about {{.Form.ItemName}} after all</label>
-    {{end}}
+    <div class="field">
+      <label for="item_id">What's it about? <span class="optional">optional</span></label>
+      <select id="item_id" name="item_id" data-room-select-target="item">
+        <option value="">— Nothing specific / not sure —</option>
+        {{range .Items}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" data-room-id="{{if .RoomID}}{{.RoomID}}{{end}}" {{if eq .ID $.Form.ItemID}}selected{{end}}>{{.Name}}{{if .RoomName}} ({{roomLabel .RoomNumber .RoomName}}){{end}}</option>{{end}}
+      </select>
+    </div>
     <div class="field">
       <label for="details">Details <span class="optional">optional</span></label>
       <textarea id="details" name="details" rows="4" maxlength="5000">{{.Form.Details}}</textarea>

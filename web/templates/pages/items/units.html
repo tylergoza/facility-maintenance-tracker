@@ -1,0 +1,25 @@
+{{define "content"}}
+{{$i := .Item}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{$i.ID}}">{{$i.Name}}</a> <span class="muted">· {{$i.Location}}</span></nav>
+<div class="page-head">
+  <div>
+    <h1>Location notes</h1>
+    <p class="muted">{{$i.Name}} #1–#{{$i.Quantity}}. A short note helps whoever's fixing it find the right one.</p>
+  </div>
+</div>
+<div class="card narrow">
+  <form method="post" action="/items/{{$i.ID}}/units" class="form">
+    {{template "csrf" .CSRF}}
+    {{range .Units}}
+      <div class="field">
+        <label for="label_{{.Number}}">#{{.Number}} <span class="optional">optional</span></label>
+        <input id="label_{{.Number}}" name="label_{{.Number}}" value="{{.Label}}" maxlength="100" placeholder="e.g. Over the stage, left">
+      </div>
+    {{end}}
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save notes</button>
+      <a class="btn btn--ghost" href="/items/{{$i.ID}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

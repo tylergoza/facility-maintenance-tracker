@@ -111,6 +111,7 @@
               {{if eq .Kind "replaced"}}<strong>Replaced {{.Replaced}}{{if .SupplyName}} × {{.SupplyName}}{{end}}</strong>
               {{else if eq .Kind "moved"}}<strong>Moved</strong>
               {{else if .TaskName}}<strong>{{.TaskName}}</strong>{{else}}<strong>Other work</strong>{{end}}
+              {{with .UnitsLabel}}<span class="muted">· {{.}}</span>{{end}}
               {{if .Notes}}{{range lines .Notes}}<div class="small">{{.}}</div>{{end}}{{end}}
               {{if .SupplyUsed}}<div class="muted small">Took {{.SupplyUsed}} from supplies</div>{{else if eq .Kind "replaced"}}<div class="muted small">Not taken from supplies</div>{{end}}
             </div></td>
@@ -262,7 +263,7 @@
       <tbody>
         {{range .Problems}}
           <tr>
-            <td data-label="Problem"><div><a href="/problems/{{.ID}}"><strong>{{.Title}}</strong></a>{{if .ItemName}}<div class="muted small">{{.ItemName}}</div>{{end}}</div></td>
+            <td data-label="Problem"><div><a href="/problems/{{.ID}}"><strong>{{.Title}}</strong></a>{{with .WhatLabel}}<div class="muted small">{{.}}</div>{{end}}</div></td>
             {{if $.ShowLocation}}<td data-label="Location">{{.Location}}</td>{{end}}
             <td data-label="Status"><div>{{template "problem-badge" .Status}}
               <div class="small">{{if .AssignedName}}{{.AssignedName}}{{else if .Active}}<span class="muted">Nobody yet</span>{{end}}</div></div></td>
@@ -272,4 +273,25 @@
       </tbody>
     </table>
   </div>
+{{end}}
+
+{{/*
+  "Which ones" checkboxes for a group item's numbered units. Ticking them
+  fills in a supply count when the form has a unit-count controller.
+  dict "Units" []Unit "Selected" []int
+*/}}
+{{define "unit-picker"}}
+  {{if .Units}}
+    <fieldset class="fieldset">
+      <legend>Which ones <span class="optional">optional</span></legend>
+      <div class="unit-picker">
+        {{range .Units}}
+          <label class="unit-chip" {{if .Label}}title="{{.Label}}"{{end}}>
+            <input type="checkbox" name="units" value="{{.Number}}" data-unit-count-target="unit" data-action="unit-count#update" {{if hasInt $.Selected .Number}}checked{{end}}>
+            {{.Name}}
+          </label>
+        {{end}}
+      </div>
+    </fieldset>
+  {{end}}
 {{end}}

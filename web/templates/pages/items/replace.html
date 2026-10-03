@@ -9,9 +9,11 @@
 </div>
 <div class="card narrow">
   {{template "errors" .Errors}}
-  <form method="post" action="/items/{{$i.ID}}/replace" class="form">
+  <form method="post" action="/items/{{$i.ID}}/replace" class="form" data-controller="unit-count" data-unit-count-per-value="{{$i.SupplyPer}}">
     {{template "csrf" .CSRF}}
     <input type="hidden" name="next" value="{{.Next}}">
+    {{if .ProblemID}}<input type="hidden" name="problem" value="{{.ProblemID}}"><p class="hint">Saving this also marks the problem resolved.</p>{{end}}
+    {{template "unit-picker" (dict "Units" .Units "Selected" .Form.Units)}}
     <div class="field-row">
       <div class="field">
         <label for="performed_on">Date replaced</label>
@@ -19,7 +21,7 @@
       </div>
       <div class="field">
         <label for="replaced">How many{{if $i.Supply.Unit}} {{$i.Supply.Unit}}{{end}}</label>
-        <input id="replaced" name="replaced" type="number" min="1" step="1" inputmode="numeric" value="{{.Form.Replaced}}" required>
+        <input id="replaced" name="replaced" type="number" min="1" step="1" inputmode="numeric" value="{{.Form.Replaced}}" required data-unit-count-target="amount">
       </div>
     </div>
     <fieldset class="fieldset">

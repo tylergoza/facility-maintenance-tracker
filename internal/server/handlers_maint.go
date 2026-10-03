@@ -298,6 +298,29 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, fmt.Sprintf("/items/%d", t.ItemID), "Task deleted. Its history entries were kept.")
 }
 
+// renderComplete shows the "Mark done" form. For group items it offers the
+// unit picker; ticking units fills in the supply count when the task uses
+// the item's own supply (per = how many each one takes).
+func (s *Server) renderComplete(w http.ResponseWriter, r *http.Request, status int, t *store.Task, c store.Completion, next string, errs []string) {
+	item, err := s.store.GetItem(t.ItemID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	units, err := s.itemUnits(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	per := 0
+	if t.SupplyID != 0 && t.SupplyID == item.SupplyID {
+		per = item.SupplyPer
+	}
+	s.render(w, r, status, "tasks/complete", map[string]any{
+		"Title": "Record: " + t.Name, "Task": t, "Next": next, "Form": c, "Units": units, "UnitSupplyPer": per, "Errors": errs,
+	})
+}
+
 func (s *Server) handleTaskCompleteForm(w http.ResponseWriter, r *http.Request) {
 	t, err := s.store.GetTask(pathID(r))
 	if err != nil {
@@ -310,9 +333,7 @@ func (s *Server) handleTaskCompleteForm(w http.ResponseWriter, r *http.Request) 
 	if t.SupplyID != 0 && t.SupplyAlways && !t.SupplyShort() {
 		c.SupplyID, c.SupplyAmount = t.SupplyID, t.SupplyAmount
 	}
-	s.render(w, r, http.StatusOK, "tasks/complete", map[string]any{
-		"Title": "Record: " + t.Name, "Task": t, "Next": r.URL.Query().Get("next"), "Form": c,
-	})
+	s.renderComplete(w, r, http.StatusOK, t, c, r.URL.Query().Get("next"), nil)
 }
 
 func (s *Server) completionFromForm(r *http.Request, c *store.Completion) []string {
@@ -342,13 +363,13 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	c := store.Completion{ItemID: t.ItemID, TaskID: t.ID}
-	next := r.PostFormValue("next")
-	fail := func(errs []string) {
-		s.render(w, r, http.StatusUnprocessableEntity, "tasks/complete", map[string]any{
-			"Title": "Record: " + t.Name, "Task": t, "Form": c, "Errors": errs, "Next": next,
-		})
+	item, err := s.store.GetItem(t.ItemID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
 	}
+	c := store.Completion{ItemID: t.ItemID, TaskID: t.ID, Units: formUnits(r, item.Quantity)}
+	next := r.PostFormValue("next")
 	errs := s.completionFromForm(r, &c)
 	if t.SupplyID != 0 && r.PostFormValue("took_supply") == "1" {
 		c.SupplyID = t.SupplyID
@@ -359,13 +380,13 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 		c.SupplyAmount = max(amount, 1)
 	}
 	if errs != nil {
-		fail(errs)
+		s.renderComplete(w, r, http.StatusUnprocessableEntity, t, c, next, errs)
 		return
 	}
 	var short *store.NotEnoughError
 	if err := s.store.RecordMaintenance(c); errors.As(err, &short) {
-		fail([]string{fmt.Sprintf("There's %s of %s. Untick \"Took it from supplies\" if it came from somewhere else, or restock it first.",
-			short.Error(), t.Supply.Name)})
+		s.renderComplete(w, r, http.StatusUnprocessableEntity, t, c, next, []string{fmt.Sprintf(
+			"There's %s of %s. Untick \"Took it from supplies\" if it came from somewhere else, or restock it first.", short.Error(), t.Supply.Name)})
 		return
 	} else if err != nil {
 		s.serverError(w, r, err)
@@ -379,16 +400,28 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 
 // Ad-hoc log entries -----------------------------------------------------
 
+func (s *Server) renderLogForm(w http.ResponseWriter, r *http.Request, status int, item *store.Item, c store.Completion, problemID int64, errs []string) {
+	units, err := s.itemUnits(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.render(w, r, status, "logs/form", map[string]any{
+		"Title": "Log work: " + item.Name, "Item": item, "Form": c, "Units": units, "ProblemID": problemID, "Errors": errs,
+	})
+}
+
 func (s *Server) handleLogNew(w http.ResponseWriter, r *http.Request) {
 	item, err := s.store.GetItem(pathID(r))
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "logs/form", map[string]any{
-		"Title": "Log work: " + item.Name, "Item": item,
-		"Form": store.Completion{PerformedOn: s.today(), PerformedBy: currentUser(r).Name()},
-	})
+	c := store.Completion{PerformedOn: s.today(), PerformedBy: currentUser(r).Name()}
+	if u := int(queryInt(r, "unit")); u >= 1 && u <= item.Quantity && item.Quantity > 1 {
+		c.Units = []int{u}
+	}
+	s.renderLogForm(w, r, http.StatusOK, item, c, queryInt(r, "problem"), nil)
 }
 
 func (s *Server) handleLogCreate(w http.ResponseWriter, r *http.Request) {
@@ -397,23 +430,31 @@ func (s *Server) handleLogCreate(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	c := store.Completion{ItemID: item.ID}
+	c := store.Completion{ItemID: item.ID, Units: formUnits(r, item.Quantity)}
+	problemID := formInt(r, "problem")
 	errs := s.completionFromForm(r, &c)
 	c.NextDueOn = ""
 	if c.Notes == "" {
 		errs = append(errs, "Describe the work that was done.")
 	}
 	if errs != nil {
-		s.render(w, r, http.StatusUnprocessableEntity, "logs/form", map[string]any{
-			"Title": "Log work: " + item.Name, "Item": item, "Form": c, "Errors": errs,
-		})
+		s.renderLogForm(w, r, http.StatusUnprocessableEntity, item, c, problemID, errs)
 		return
 	}
 	if err := s.store.RecordMaintenance(c); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	s.redirect(w, r, fmt.Sprintf("/items/%d", item.ID), "Work logged.")
+	to, msg := fmt.Sprintf("/items/%d", item.ID), "Work logged."
+	if problemID != 0 {
+		to = fmt.Sprintf("/problems/%d", problemID)
+	}
+	what := item.Name
+	if len(c.Units) > 0 {
+		what += " " + store.UnitsLabel(c.Units)
+	}
+	msg += s.resolveFromFix(r, problemID, item, "Work on "+what+": "+c.Notes)
+	s.redirect(w, r, to, msg)
 }
 
 func (s *Server) handleLogDelete(w http.ResponseWriter, r *http.Request) {

@@ -23,13 +23,37 @@
 
 <div class="card">
   <dl class="details">
-    <div><dt>Where</dt><dd>{{$p.Location}}{{if $p.ItemID}}<div><a href="/items/{{$p.ItemID}}">{{$p.ItemName}}</a></div>{{end}}</dd></div>
+    <div><dt>Where</dt><dd>{{$p.Location}}{{if $p.ItemID}}<div><a href="/items/{{$p.ItemID}}">{{$p.ItemName}}</a>{{with $p.UnitName}} {{.}}{{end}}</div>{{end}}</dd></div>
     <div><dt>Reported</dt><dd>{{fmtTime $p.CreatedAt}}{{if $p.ReporterName}}<div>by {{$p.ReporterName}}{{if not $p.ReportedBy}} <span class="muted small">(not signed in)</span>{{end}}</div>{{end}}</dd></div>
     {{if $p.ReporterContact}}<div><dt>Contact</dt><dd>{{$p.ReporterContact}}</dd></div>{{end}}
     {{if $p.ResolvedAt}}<div><dt>Resolved</dt><dd>{{fmtTime $p.ResolvedAt}}</dd></div>{{end}}
   </dl>
   {{if $p.Details}}<div class="notes">{{range lines $p.Details}}<p>{{.}}</p>{{end}}</div>{{end}}
 </div>
+
+{{if and .Item $p.Active}}{{$it := .Item}}
+<div class="card narrow section">
+  <h2 class="card__title">Fix it</h2>
+  {{if .Units}}
+    <form method="post" action="/problems/{{$p.ID}}/unit" class="inline-fields">
+      {{template "csrf" .CSRF}}
+      <div class="field">
+        <label for="unit">Which one?</label>
+        <select id="unit" name="unit">
+          <option value="0">Not sure yet</option>
+          {{range .Units}}<option value="{{.Number}}" {{if eq .Number $p.Unit}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <button type="submit" class="btn btn--sm">Save</button>
+    </form>
+  {{end}}
+  <div class="form__actions">
+    {{if $it.SupplyID}}<a class="btn btn--primary" href="/items/{{$it.ID}}/replace?problem={{$p.ID}}{{if $p.Unit}}&unit={{$p.Unit}}{{end}}&next=/problems/{{$p.ID}}">Replace {{if $p.Unit}}#{{$p.Unit}}{{else}}{{$it.Supply.Name}}{{end}}</a>{{end}}
+    <a class="btn" href="/items/{{$it.ID}}/log?problem={{$p.ID}}{{if $p.Unit}}&unit={{$p.Unit}}{{end}}">Log work{{if $p.Unit}} on #{{$p.Unit}}{{end}}</a>
+  </div>
+  <p class="hint">Recording the fix here adds it to the history of {{$it.Name}} and marks this problem resolved.</p>
+</div>
+{{end}}
 
 <section class="section">
   <h2 class="section__title">Updates <span class="count">{{len .Updates}}</span></h2>

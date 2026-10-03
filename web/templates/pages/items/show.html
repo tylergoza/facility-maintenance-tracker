@@ -35,6 +35,32 @@
 </div>
 {{end}}
 
+{{if .Units}}
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Units <span class="count">{{len .Units}}</span></h2>
+    <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/units">Location notes</a>
+  </div>
+  <p class="muted small">Number each one #1–#{{len .Units}} with a sticker or label so you can record which ones were worked on.{{if $i.SupplyID}} Any replaced {{.FrequentReplacements}} or more times in a year is flagged.{{end}}</p>
+  <div class="table-wrap">
+    <table class="table table--stack">
+      <thead><tr><th>Unit</th>{{if $i.SupplyID}}<th>Last replaced</th><th class="num">Past year</th>{{end}}</tr></thead>
+      <tbody>
+        {{range .Units}}
+          <tr>
+            <td data-label="Unit"><div><strong>#{{.Number}}</strong>{{if .Label}} <span class="muted">– {{.Label}}</span>{{end}}</div></td>
+            {{if $i.SupplyID}}
+              <td data-label="Last replaced">{{if .LastReplaced}}<span class="small">{{fmtDate .LastReplaced}}</span>{{else}}<span class="muted small">Never recorded</span>{{end}}</td>
+              <td data-label="Past year" class="num">{{if .Frequent}}<span class="badge badge--due-soon">{{.RecentCount}} times: check why</span>{{else}}{{.RecentCount}}{{end}}</td>
+            {{end}}
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{end}}
+
 {{if .Problems}}
 <section class="section">
   <h2 class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>

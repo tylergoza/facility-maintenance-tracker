@@ -6,6 +6,7 @@
   {{template "errors" .Errors}}
   <form method="post" action="/items/{{$i.ID}}/log" class="form">
     {{template "csrf" .CSRF}}
+    {{if .ProblemID}}<input type="hidden" name="problem" value="{{.ProblemID}}"><p class="hint">Saving this also marks the problem resolved.</p>{{end}}
     <div class="field">
       <label for="notes">What was done</label>
       <textarea id="notes" name="notes" rows="3" required autofocus placeholder="e.g. Replaced leaking valve under sink">{{.Form.Notes}}</textarea>
@@ -20,13 +21,14 @@
         <input id="performed_by" name="performed_by" value="{{.Form.PerformedBy}}" placeholder="Name or company">
       </div>
     </div>
+    {{template "unit-picker" (dict "Units" .Units "Selected" .Form.Units)}}
     <div class="field">
       <label for="cost">Cost <span class="optional">optional</span></label>
       <input id="cost" name="cost" inputmode="decimal" placeholder="0.00" value="{{with .Form.CostCents}}{{printf "%.2f" (divf .)}}{{end}}">
     </div>
     <div class="form__actions">
       <button type="submit" class="btn btn--primary">Save</button>
-      <a class="btn btn--ghost" href="/items/{{$i.ID}}">Cancel</a>
+      <a class="btn btn--ghost" href="{{if .ProblemID}}/problems/{{.ProblemID}}{{else}}/items/{{$i.ID}}{{end}}">Cancel</a>
     </div>
   </form>
 </div>

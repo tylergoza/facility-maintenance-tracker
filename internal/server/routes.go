@@ -72,6 +72,8 @@ func (s *Server) routes() http.Handler {
 	auth("POST /items/{id}/replace", s.handleReplace)
 	auth("GET /items/{id}/move", s.handleMoveForm)
 	auth("POST /items/{id}/move", s.handleMove)
+	auth("GET /items/{id}/units", s.handleUnitsForm)
+	auth("POST /items/{id}/units", s.handleUnitsSave)
 
 	auth("GET /supplies", s.handleSupplies)
 	auth("GET /supplies/new", s.handleSupplyNew)
@@ -87,6 +89,7 @@ func (s *Server) routes() http.Handler {
 	auth("GET /problems/{id}/edit", s.handleProblemEdit)
 	auth("POST /problems/{id}", s.handleProblemSave)
 	auth("POST /problems/{id}/update", s.handleProblemUpdate)
+	auth("POST /problems/{id}/unit", s.handleProblemUnit)
 	auth("POST /problems/{id}/delete", s.handleProblemDelete)
 
 	auth("GET /tasks/new", s.handleTaskNew)

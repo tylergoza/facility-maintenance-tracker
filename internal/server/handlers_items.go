@@ -249,8 +249,14 @@ func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
 			done = append(done, t)
 		}
 	}
+	units, err := s.itemUnits(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	s.render(w, r, http.StatusOK, "items/show", map[string]any{
 		"Title": item.Name, "Item": item, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies, "Problems": problems,
+		"Units": units, "FrequentReplacements": store.FrequentReplacements,
 	})
 }
 
@@ -305,9 +311,14 @@ func (s *Server) handleItemDelete(w http.ResponseWriter, r *http.Request) {
 
 // Replacing an item's supply -------------------------------------------------
 
-func (s *Server) renderReplaceForm(w http.ResponseWriter, r *http.Request, status int, item *store.Item, c store.Completion, next string, errs []string) {
+func (s *Server) renderReplaceForm(w http.ResponseWriter, r *http.Request, status int, item *store.Item, c store.Completion, next string, problemID int64, errs []string) {
+	units, err := s.itemUnits(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	s.render(w, r, status, "items/replace", map[string]any{
-		"Title": "Replace " + item.Supply.Name, "Item": item, "Form": c, "Next": next, "Errors": errs,
+		"Title": "Replace " + item.Supply.Name, "Item": item, "Form": c, "Units": units, "Next": next, "ProblemID": problemID, "Errors": errs,
 	})
 }
 
@@ -327,7 +338,10 @@ func (s *Server) handleReplaceForm(w http.ResponseWriter, r *http.Request) {
 	if !item.SupplyShort() {
 		c.SupplyID = item.SupplyID
 	}
-	s.renderReplaceForm(w, r, http.StatusOK, item, c, r.URL.Query().Get("next"), nil)
+	if u := int(queryInt(r, "unit")); u >= 1 && u <= item.Quantity && item.Quantity > 1 {
+		c.Units = []int{u}
+	}
+	s.renderReplaceForm(w, r, http.StatusOK, item, c, r.URL.Query().Get("next"), queryInt(r, "problem"), nil)
 }
 
 func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
@@ -340,10 +354,10 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, fmt.Sprintf("/items/%d/edit", item.ID), http.StatusSeeOther)
 		return
 	}
-	next := r.PostFormValue("next")
+	next, problemID := r.PostFormValue("next"), formInt(r, "problem")
 	user := currentUser(r)
 	c := store.Completion{ItemID: item.ID, Kind: "replaced", PerformedOn: formStr(r, "performed_on"), PerformedBy: user.Name(),
-		Notes: formStr(r, "notes"), UserID: user.ID}
+		Notes: formStr(r, "notes"), UserID: user.ID, Units: formUnits(r, item.Quantity)}
 	var errs []string
 	if !validDate(c.PerformedOn) {
 		errs = append(errs, "Enter the date it was replaced.")
@@ -358,12 +372,12 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 		c.SupplyID, c.SupplyAmount = item.SupplyID, c.Replaced
 	}
 	if errs != nil {
-		s.renderReplaceForm(w, r, http.StatusUnprocessableEntity, item, c, next, errs)
+		s.renderReplaceForm(w, r, http.StatusUnprocessableEntity, item, c, next, problemID, errs)
 		return
 	}
 	var short *store.NotEnoughError
 	if err := s.store.RecordMaintenance(c); errors.As(err, &short) {
-		s.renderReplaceForm(w, r, http.StatusUnprocessableEntity, item, c, next, []string{fmt.Sprintf(
+		s.renderReplaceForm(w, r, http.StatusUnprocessableEntity, item, c, next, problemID, []string{fmt.Sprintf(
 			"There's %s of %s. Untick \"Took it from supplies\" if it came from somewhere else, or restock first.", short.Error(), item.Supply.Name)})
 		return
 	} else if err != nil {
@@ -373,7 +387,11 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 	if next == "" {
 		next = fmt.Sprintf("/items/%d", item.ID)
 	}
-	msg := fmt.Sprintf("Recorded %d × %s replaced in %s.", c.Replaced, item.Supply.Name, item.Name)
+	what := item.Name
+	if len(c.Units) > 0 {
+		what += " " + store.UnitsLabel(c.Units)
+	}
+	msg := fmt.Sprintf("Recorded %d × %s replaced in %s.", c.Replaced, item.Supply.Name, what)
 	if c.SupplyID != 0 {
 		if sp, err := s.store.GetSupply(item.SupplyID); err == nil {
 			msg += fmt.Sprintf(" %s on hand.", sp.QuantityLabel())
@@ -382,6 +400,7 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	msg += s.resolveFromFix(r, problemID, item, fmt.Sprintf("Replaced %d × %s in %s.", c.Replaced, item.Supply.Name, what))
 	s.redirect(w, r, safeRedirect(next), msg)
 }
 
@@ -456,4 +475,87 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirect(w, r, safeRedirect(next), item.Name+" moved to "+moved.Location()+".")
+}
+
+// Units -------------------------------------------------------------------
+
+// formUnits reads the "Which ones" checkboxes, dropping anything that
+// isn't a unit of an item with this many.
+func formUnits(r *http.Request, quantity int) []int {
+	var units []int
+	for _, v := range r.PostForm["units"] {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= quantity && !slices.Contains(units, n) {
+			units = append(units, n)
+		}
+	}
+	slices.Sort(units)
+	return units
+}
+
+// itemUnits returns a group item's units for pickers; nil for single items.
+func (s *Server) itemUnits(item *store.Item) ([]store.Unit, error) {
+	if item.Quantity < 2 {
+		return nil, nil
+	}
+	return s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
+}
+
+func (s *Server) handleUnitsForm(w http.ResponseWriter, r *http.Request) {
+	item, err := s.store.GetItem(pathID(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	units, err := s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "items/units", map[string]any{"Title": "Number " + item.Name, "Item": item, "Units": units})
+}
+
+func (s *Server) handleUnitsSave(w http.ResponseWriter, r *http.Request) {
+	item, err := s.store.GetItem(pathID(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	labels := map[int]string{}
+	for n := 1; n <= item.Quantity; n++ {
+		label := formStr(r, "label_"+strconv.Itoa(n))
+		if msg := tooLong("Location note", label, 100); msg != nil {
+			s.setFlash(w, r, "error", fmt.Sprintf("#%d: %s", n, msg[0]))
+			http.Redirect(w, r, fmt.Sprintf("/items/%d/units", item.ID), http.StatusSeeOther)
+			return
+		}
+		labels[n] = label
+	}
+	if err := s.store.SaveUnitLabels(item.ID, labels); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.redirect(w, r, fmt.Sprintf("/items/%d", item.ID), "Unit notes saved.")
+}
+
+// resolveFromFix marks a problem resolved after work on its item was
+// recorded from the problem page. It returns text for the flash message,
+// or "" when there was nothing to resolve.
+func (s *Server) resolveFromFix(r *http.Request, problemID int64, item *store.Item, note string) string {
+	if problemID == 0 {
+		return ""
+	}
+	p, err := s.store.GetProblem(problemID)
+	if err != nil || p.ItemID != item.ID || !p.Active() {
+		return ""
+	}
+	user := currentUser(r)
+	assignee := p.AssignedTo
+	if assignee == 0 {
+		assignee = user.ID
+	}
+	if _, err := s.store.UpdateProblem(store.ProblemChange{ProblemID: p.ID, Status: store.ProblemResolved, AssignedTo: assignee, Note: note, UserID: user.ID}); err != nil {
+		s.log.Error("resolve problem", "problem", p.ID, "err", err)
+		return ""
+	}
+	return fmt.Sprintf(" Problem \"%s\" marked resolved.", p.Title)
 }

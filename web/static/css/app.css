@@ -385,6 +385,8 @@ select:disabled { opacity: .6; }
 .fieldset legend { font-weight: 700; padding: 0 6px; }
 
 .form__actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.inline-fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
+.inline-fields .field { flex: 0 1 260px; }
 @media (max-width: 519px) { .form__actions .btn { flex: 1; } }
 
 /* ---------- Alerts & flash ---------- */
@@ -435,6 +437,15 @@ select:disabled { opacity: .6; }
 .timeline p { margin: 4px 0 0; }
 /* Honeypot: off-screen so people never fill it in; bots usually do. */
 .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+/* Unit picker: one chip per numbered unit */
+.unit-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.unit-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.unit-chip:has(input:checked) { border-color: var(--primary); background: var(--surface-2); font-weight: 700; }
+.unit-chip input { accent-color: var(--primary); }
 
 @media print {
   .topbar, .toolbar, .tiles, .task-card__actions, .page-head__actions, .footer, .btn { display: none !important; }

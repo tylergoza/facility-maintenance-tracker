@@ -290,6 +290,7 @@ type Log struct {
 	Kind         string // "work", "replaced" or "moved"
 	Replaced     int    // how many of the item's supply were replaced; 0 if none
 	SupplyName   string // the item's supply, for "Replaced 2 × …"
+	Units        []int  // which of a group item's units it was about
 	BuildingName string
 	RoomNumber   string
 	RoomName     string
@@ -300,6 +301,9 @@ type Log struct {
 	CreatedBy    string
 	SupplyUsed   string // e.g. "1 × Furnace filters"; blank if none
 }
+
+// UnitsLabel renders "#3, #7", or "" when no units were picked.
+func (l Log) UnitsLabel() string { return UnitsLabel(l.Units) }
 
 func (l Log) Location() string {
 	if l.RoomName != "" {
@@ -327,7 +331,8 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 		       l.performed_on, l.performed_by, COALESCE(l.cost_cents, 0), l.notes,
 		       COALESCE(NULLIF(u.display_name, ''), u.username, ''),
 		       COALESCE((SELECT c.amount || ' × ' || s.name FROM supply_changes c JOIN supplies s ON s.id = c.supply_id
-		                 WHERE c.log_id = l.id AND c.kind = 'used' LIMIT 1), '')
+		                 WHERE c.log_id = l.id AND c.kind = 'used' LIMIT 1), ''),
+		       COALESCE((SELECT group_concat(unit) FROM log_units WHERE log_id = l.id), '')
 		FROM maintenance_logs l
 		JOIN items i ON i.id = l.item_id
 		JOIN buildings b ON b.id = i.building_id
@@ -353,11 +358,13 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 	var out []Log
 	for rows.Next() {
 		var l Log
+		var units string
 		if err := rows.Scan(&l.ID, &l.ItemID, &l.ItemName, &l.TaskID, &l.TaskName, &l.Kind, &l.Replaced, &l.SupplyName,
 			&l.BuildingName, &l.RoomNumber, &l.RoomName,
-			&l.PerformedOn, &l.PerformedBy, &l.CostCents, &l.Notes, &l.CreatedBy, &l.SupplyUsed); err != nil {
+			&l.PerformedOn, &l.PerformedBy, &l.CostCents, &l.Notes, &l.CreatedBy, &l.SupplyUsed, &units); err != nil {
 			return nil, err
 		}
+		l.Units = parseUnits(units)
 		out = append(out, l)
 	}
 	return out, rows.Err()
@@ -390,7 +397,9 @@ type Completion struct {
 	Kind   string // "work" (default) or "replaced"
 	// Replaced is how many of the item's own supply were replaced. Taking
 	// the item's supply from stock counts as replacing it.
-	Replaced    int
+	Replaced int
+	// Units are which of a group item's numbered units the work was on.
+	Units       []int
 	PerformedOn string
 	PerformedBy string
 	CostCents   int64
@@ -417,8 +426,12 @@ func (s *Store) RecordMaintenance(c Completion) error {
 		c.Kind = "work"
 	}
 	var itemSupply int64
-	if err := tx.QueryRow(`SELECT COALESCE(supply_id, 0) FROM items WHERE id = ?`, c.ItemID).Scan(&itemSupply); err != nil {
+	var quantity int
+	if err := tx.QueryRow(`SELECT COALESCE(supply_id, 0), quantity FROM items WHERE id = ?`, c.ItemID).Scan(&itemSupply, &quantity); err != nil {
 		return notFound(err)
+	}
+	if err := checkUnits(c.Units, quantity); err != nil {
+		return err
 	}
 	if c.Replaced == 0 && c.SupplyID != 0 && c.SupplyID == itemSupply {
 		c.Replaced = c.SupplyAmount
@@ -429,17 +442,25 @@ func (s *Store) RecordMaintenance(c Completion) error {
 	if err != nil {
 		return err
 	}
-	if c.SupplyID != 0 && c.SupplyAmount > 0 {
-		logID, err := res.LastInsertId()
-		if err != nil {
+	logID, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	for _, u := range c.Units {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO log_units (log_id, unit) VALUES (?, ?)`, logID, u); err != nil {
 			return err
 		}
+	}
+	if c.SupplyID != 0 && c.SupplyAmount > 0 {
 		var itemName, taskName, number, room string // only for the history note; blank is fine
 		_ = tx.QueryRow(`SELECT i.name, COALESCE(t.name, ''), COALESCE(r.number, ''), COALESCE(r.name, '')
 			FROM items i LEFT JOIN tasks t ON t.id = ? LEFT JOIN rooms r ON r.id = i.room_id WHERE i.id = ?`, c.TaskID, c.ItemID).
 			Scan(&itemName, &taskName, &number, &room)
 		if room != "" {
 			itemName += ", " + RoomLabel(number, room)
+		}
+		if len(c.Units) > 0 {
+			itemName += ", " + UnitsLabel(c.Units)
 		}
 		note := "For " + itemName
 		switch {

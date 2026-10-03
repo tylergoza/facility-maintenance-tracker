@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 )
@@ -510,7 +511,7 @@ func TestProblems(t *testing.T) {
 	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"110"}, "name": {"Kitchen"}}, 200)
 	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Sink"}}, 200)
 
-	if !strings.Contains(c.get("/report?item=1", 200), "About: <strong>Sink</strong>") {
+	if !strings.Contains(c.get("/report?item=1", 200), `value="1" data-building-id="1" data-room-id="1" selected>Sink`) {
 		t.Error("report form should be preset from the item")
 	}
 	body := c.post("/report", "/report", url.Values{"building_id": {"1"}, "room_id": {"1"}, "item_id": {"1"}, "title": {"Faucet dripping"}, "details": {"Hot side"}}, 200)
@@ -555,7 +556,7 @@ func TestProblems(t *testing.T) {
 		t.Error("timeline should show unassigning")
 	}
 	c.post("/problems/1", "/problems/1/update", url.Values{"status": {"bogus"}, "assigned_to": {"0"}}, 200)
-	c.post("/problems/1/edit", "/problems/1", url.Values{"building_id": {"1"}, "title": {"Kitchen faucet dripping"}, "reporter_name": {"Alex"}, "unlink_item": {"1"}}, 200)
+	c.post("/problems/1/edit", "/problems/1", url.Values{"building_id": {"1"}, "title": {"Kitchen faucet dripping"}, "reporter_name": {"Alex"}}, 200)
 	if p, _ := st.GetProblem(1); p.Title != "Kitchen faucet dripping" || p.RoomID != 0 || p.ItemID != 0 {
 		t.Errorf("edited problem = %+v", p)
 	}
@@ -588,7 +589,7 @@ func TestProblems(t *testing.T) {
 	if body := c.post("/report", "/report", report, 200); !strings.Contains(body, "Thanks!") {
 		t.Error("visitor report should thank them")
 	}
-	if p, _ := st.GetProblem(2); p.ReporterName != "Pat" || p.ReporterContact != "555-1234" || p.ReportedBy != 0 || p.ItemID != 0 || p.RoomID != 1 {
+	if p, _ := st.GetProblem(2); p.ReporterName != "Pat" || p.ReporterContact != "555-1234" || p.ReportedBy != 0 || p.ItemID != 1 || p.RoomID != 1 {
 		t.Errorf("visitor report = %+v", p)
 	}
 	// Honeypot: looks like it worked, saves nothing.
@@ -611,4 +612,117 @@ func TestProblems(t *testing.T) {
 	if body := c.get("/problems/2", 200); !strings.Contains(body, "Sign in") || strings.Contains(body, "555-1234") {
 		t.Error("problem pages must require sign-in")
 	}
+}
+
+func TestUnits(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
+	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Hall"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"LED A19"}, "unit": {"bulbs"}, "quantity": {"10"}}, 200)
+	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Lights"}, "quantity": {"4"},
+		"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}, 200)
+
+	// Location notes for the numbered units.
+	c.get("/items/1/units", 200)
+	c.post("/items/1/units", "/items/1/units", url.Values{"label_3": {"Over the stage"}, "label_9": {"ignored"}}, 200)
+	body := c.get("/items/1", 200)
+	if !strings.Contains(body, "<strong>#3</strong> <span class=\"muted\">– Over the stage</span>") || strings.Contains(body, "ignored") {
+		t.Error("units table should show notes for #1–#4 only")
+	}
+
+	// Replacing records which ones; units outside 1..4 are dropped.
+	if !strings.Contains(c.get("/items/1/replace", 200), `name="units" value="4"`) {
+		t.Error("replace form should offer the unit picker")
+	}
+	body = c.post("/items/1/replace", "/items/1/replace", url.Values{"performed_on": {"2026-01-10"}, "replaced": {"2"}, "took_supply": {"1"},
+		"units": {"2", "3", "7"}}, 200)
+	if !strings.Contains(body, "Recorded 2 × LED A19 replaced in Lights #2, #3.") || !strings.Contains(body, "· #2, #3") {
+		t.Error("replacement should name the units in the flash and history")
+	}
+	if !strings.Contains(c.get("/supplies/1", 200), "Replaced in Lights, Hall, #2, #3") {
+		t.Error("supply history should name the units")
+	}
+	// #3 replaced three times in a year gets flagged.
+	for _, day := range []string{"2026-03-01", "2026-05-01"} {
+		c.post("/items/1/replace", "/items/1/replace", url.Values{"performed_on": {day}, "replaced": {"1"}, "units": {"3"}}, 200)
+	}
+	units, _ := st.ItemUnits(1, 4, mustDate(t, "2026-06-01"))
+	if units[2].RecentCount != 3 || !units[2].Frequent() || units[2].LastReplaced != "2026-05-01" || units[1].RecentCount != 1 || units[0].LastReplaced != "" {
+		t.Errorf("units = %+v", units)
+	}
+	if !strings.Contains(c.get("/items/1", 200), "3 times: check why") {
+		t.Error("item page should flag the unit replaced too often")
+	}
+
+	// Mark done and other work can record units too.
+	c.post("/tasks/new?item=1", "/tasks", url.Values{"item_id": {"1"}, "name": {"Clean fixtures"}}, 200)
+	if !strings.Contains(c.get("/tasks/1/complete", 200), `name="units" value="1"`) {
+		t.Error("completion form should offer the unit picker")
+	}
+	c.post("/tasks/1/complete", "/tasks/1/complete", url.Values{"performed_on": {"2026-05-02"}, "units": {"1", "4"}}, 200)
+	c.post("/items/1/log", "/items/1/log", url.Values{"performed_on": {"2026-05-03"}, "notes": {"Tightened socket"}, "units": {"3"}}, 200)
+	logs, _ := st.ListLogs(store.LogFilter{ItemID: 1})
+	if logs[0].UnitsLabel() != "#3" || logs[1].UnitsLabel() != "#1, #4" {
+		t.Errorf("log units = %q, %q", logs[0].UnitsLabel(), logs[1].UnitsLabel())
+	}
+
+	// A problem reported against the group, narrowed to one unit by staff,
+	// then fixed from the problem page.
+	c.post("/report", "/report", url.Values{"building_id": {"1"}, "room_id": {"1"}, "item_id": {"1"}, "title": {"Light out"}}, 200)
+	body = c.post("/problems/1", "/problems/1/unit", url.Values{"unit": {"3"}}, 200)
+	if !strings.Contains(body, "Noted: it&#39;s #3.") || !strings.Contains(body, "It&#39;s #3 – Over the stage.") || !strings.Contains(body, "Replace #3") {
+		t.Error("setting the unit should show in the timeline and offer to replace it")
+	}
+	if p, _ := st.GetProblem(1); p.WhatLabel() != "Lights #3 – Over the stage" {
+		t.Errorf("what = %q", p.WhatLabel())
+	}
+	if !strings.Contains(c.get("/problems", 200), "Lights #3 – Over the stage") {
+		t.Error("problem list should show which unit")
+	}
+	c.post("/problems/1", "/problems/1/unit", url.Values{"unit": {"9"}}, 200)
+	if p, _ := st.GetProblem(1); p.Unit != 3 {
+		t.Errorf("out-of-range unit was saved: %d", p.Unit)
+	}
+	if !strings.Contains(c.get("/items/1/replace?unit=3&problem=1&next=/problems/1", 200), `name="units" value="3" data-unit-count-target="unit" data-action="unit-count#update" checked`) {
+		t.Error("replace from a problem should pre-tick its unit")
+	}
+	body = c.post("/items/1/replace", "/items/1/replace", url.Values{"performed_on": {"2026-05-04"}, "replaced": {"1"}, "took_supply": {"1"}, "units": {"3"},
+		"problem": {"1"}, "next": {"/problems/1"}}, 200)
+	if !strings.Contains(body, "Problem &#34;Light out&#34; marked resolved.") || !strings.Contains(body, "Replaced 1 × LED A19 in Lights #3.") {
+		t.Error("replacing from the problem page should resolve it with a note")
+	}
+	if p, _ := st.GetProblem(1); p.Status != store.ProblemResolved || p.AssignedTo != 1 {
+		t.Errorf("problem after fix = %+v", p)
+	}
+	// Log work from a problem resolves it too.
+	c.post("/report", "/report", url.Values{"building_id": {"1"}, "item_id": {"1"}, "title": {"Buzzing"}}, 200)
+	c.post("/items/1/log?problem=2", "/items/1/log", url.Values{"performed_on": {"2026-05-05"}, "notes": {"Replaced dimmer"}, "problem": {"2"}}, 200)
+	if p, _ := st.GetProblem(2); p.Status != store.ProblemResolved {
+		t.Errorf("problem 2 should be resolved: %+v", p)
+	}
+
+	// Fewer units: #3 and #4 drop out of pickers, their history stays.
+	c.post("/items/1/edit", "/items/1", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Lights"}, "quantity": {"2"},
+		"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}, 200)
+	if strings.Contains(c.get("/items/1/replace", 200), `name="units" value="3"`) {
+		t.Error("units beyond the count should not be offered")
+	}
+	if !strings.Contains(c.get("/items/1", 200), "· #1, #4") {
+		t.Error("history should keep units no longer counted")
+	}
+	// Single items have no units.
+	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "name": {"Furnace"}}, 200)
+	if strings.Contains(c.get("/items/2/log", 200), "Which ones") {
+		t.Error("single items should not offer a unit picker")
+	}
+}
+
+func mustDate(t *testing.T, d string) time.Time {
+	t.Helper()
+	v, err := time.Parse(store.DateLayout, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

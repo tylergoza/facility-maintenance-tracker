@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -44,6 +45,9 @@ type Problem struct {
 	RoomName        string
 	ItemID          int64
 	ItemName        string
+	ItemQuantity    int
+	Unit            int // which of the item's units, once known; 0 = not set
+	UnitLabel       string
 	Title           string
 	Details         string
 	Status          string
@@ -58,7 +62,23 @@ type Problem struct {
 }
 
 func (p Problem) StatusLabel() string { return ProblemStatusLabel(p.Status) }
-func (p Problem) Active() bool        { return p.Status != ProblemResolved }
+
+// UnitName renders "#7 – over the stage", or "" when no unit is set.
+func (p Problem) UnitName() string {
+	if p.Unit == 0 {
+		return ""
+	}
+	return UnitName(p.Unit, p.UnitLabel)
+}
+
+// WhatLabel renders "Lights #7", "Lights" or "" for lists.
+func (p Problem) WhatLabel() string {
+	if p.Unit != 0 {
+		return p.ItemName + " " + UnitName(p.Unit, p.UnitLabel)
+	}
+	return p.ItemName
+}
+func (p Problem) Active() bool { return p.Status != ProblemResolved }
 
 func (p Problem) Location() string {
 	if p.RoomName != "" {
@@ -79,7 +99,8 @@ type ProblemFilter struct {
 
 const problemSelect = `
 	SELECT p.id, p.building_id, b.name, COALESCE(p.room_id, 0), COALESCE(r.number, ''), COALESCE(r.name, ''),
-	       COALESCE(p.item_id, 0), COALESCE(i.name, ''), p.title, p.details, p.status,
+	       COALESCE(p.item_id, 0), COALESCE(i.name, ''), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(iu.label, ''),
+	       p.title, p.details, p.status,
 	       COALESCE(p.assigned_to, 0), COALESCE(NULLIF(a.display_name, ''), a.username, ''),
 	       COALESCE(p.reported_by, 0), p.reporter_name, p.reporter_contact,
 	       p.created_at, p.updated_at, COALESCE(p.resolved_at, '')
@@ -87,6 +108,7 @@ const problemSelect = `
 	JOIN buildings b ON b.id = p.building_id
 	LEFT JOIN rooms r ON r.id = p.room_id
 	LEFT JOIN items i ON i.id = p.item_id
+	LEFT JOIN item_units iu ON iu.item_id = p.item_id AND iu.number = p.unit
 	LEFT JOIN users a ON a.id = p.assigned_to`
 
 func scanProblems(rows *sql.Rows) ([]Problem, error) {
@@ -95,7 +117,7 @@ func scanProblems(rows *sql.Rows) ([]Problem, error) {
 	for rows.Next() {
 		var p Problem
 		if err := rows.Scan(&p.ID, &p.BuildingID, &p.BuildingName, &p.RoomID, &p.RoomNumber, &p.RoomName,
-			&p.ItemID, &p.ItemName, &p.Title, &p.Details, &p.Status,
+			&p.ItemID, &p.ItemName, &p.ItemQuantity, &p.Unit, &p.UnitLabel, &p.Title, &p.Details, &p.Status,
 			&p.AssignedTo, &p.AssignedName, &p.ReportedBy, &p.ReporterName, &p.ReporterContact,
 			&p.CreatedAt, &p.UpdatedAt, &p.ResolvedAt); err != nil {
 			return nil, err
@@ -172,14 +194,59 @@ func (s *Store) CreateProblem(p *Problem) error {
 }
 
 // SaveProblemDetails updates what and where. Status and assignment change
-// through UpdateProblem so they show in the timeline.
+// through UpdateProblem so they show in the timeline. Pointing it at a
+// different item clears the unit.
 func (s *Store) SaveProblemDetails(p *Problem) error {
 	p.Title = strings.TrimSpace(p.Title)
-	_, err := s.DB.Exec(`UPDATE problems SET building_id = ?, room_id = ?, item_id = ?, title = ?, details = ?,
-		reporter_name = ?, reporter_contact = ?, updated_at = datetime('now') WHERE id = ?`,
-		p.BuildingID, nullInt(p.RoomID), nullInt(p.ItemID), p.Title, p.Details,
-		strings.TrimSpace(p.ReporterName), strings.TrimSpace(p.ReporterContact), p.ID)
+	_, err := s.DB.Exec(`UPDATE problems SET building_id = ?, room_id = ?, title = ?, details = ?,
+		reporter_name = ?, reporter_contact = ?, updated_at = datetime('now'),
+		unit = CASE WHEN item_id IS ? THEN unit END, item_id = ? WHERE id = ?`,
+		p.BuildingID, nullInt(p.RoomID), p.Title, p.Details,
+		strings.TrimSpace(p.ReporterName), strings.TrimSpace(p.ReporterContact), nullInt(p.ItemID), nullInt(p.ItemID), p.ID)
 	return err
+}
+
+// ErrNoItem is returned when setting a unit on a problem with no item.
+var ErrNoItem = errors.New("problem has no item")
+
+// SetProblemUnit records which of the item's units a problem is about (0
+// to clear it) and notes it in the timeline.
+func (s *Store) SetProblemUnit(problemID int64, unit int, userID int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var itemID int64
+	var quantity, current int
+	if err := tx.QueryRow(`SELECT COALESCE(p.item_id, 0), COALESCE(i.quantity, 0), COALESCE(p.unit, 0)
+		FROM problems p LEFT JOIN items i ON i.id = p.item_id WHERE p.id = ?`, problemID).Scan(&itemID, &quantity, &current); err != nil {
+		return notFound(err)
+	}
+	if itemID == 0 {
+		return ErrNoItem
+	}
+	if unit == current {
+		return nil
+	}
+	if unit != 0 {
+		if err := checkUnits([]int{unit}, quantity); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE problems SET unit = ?, updated_at = datetime('now') WHERE id = ?`, nullInt(int64(unit)), problemID); err != nil {
+		return err
+	}
+	note := "Not sure which one after all."
+	if unit != 0 {
+		var label string
+		_ = tx.QueryRow(`SELECT label FROM item_units WHERE item_id = ? AND number = ?`, itemID, unit).Scan(&label)
+		note = "It's " + UnitName(unit, label) + "."
+	}
+	if _, err := tx.Exec(`INSERT INTO problem_updates (problem_id, note, created_by) VALUES (?, ?, ?)`, problemID, note, nullInt(userID)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteProblem(id int64) error {
