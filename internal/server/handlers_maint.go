@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
@@ -485,14 +487,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, http.StatusOK, "settings", map[string]any{
 		"Title": "Settings", "SiteNameValue": s.SiteName(), "DueSoonDays": s.DueSoonDays(), "PublicReportsValue": s.PublicReports(), "Counts": counts,
-		"ReportURL": s.absURL(r, "/report"),
+		"ReportURL": s.absURL(r, "/report"), "SiteURLValue": s.SiteURL(), "GuessedURL": s.guessedURL(r),
 	})
 }
 
 func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 	name := formStr(r, "site_name")
 	days, err := strconv.Atoi(formStr(r, "due_soon_days"))
+	siteURL, urlErr := normalizeSiteURL(formStr(r, "site_url"))
 	var errs []string
+	if urlErr != nil {
+		errs = append(errs, urlErr.Error())
+	}
 	if name == "" {
 		errs = append(errs, "Site name is required.")
 	}
@@ -504,6 +510,7 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusUnprocessableEntity, "settings", map[string]any{
 			"Title": "Settings", "SiteNameValue": name, "DueSoonDays": formStr(r, "due_soon_days"), "Counts": counts, "Errors": errs,
 			"PublicReportsValue": r.PostFormValue("public_reports") == "1", "ReportURL": s.absURL(r, "/report"),
+			"SiteURLValue": formStr(r, "site_url"), "GuessedURL": s.guessedURL(r),
 		})
 		return
 	}
@@ -520,6 +527,10 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		public = "1"
 	}
 	if err := s.store.SetSetting("public_reports", public); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if err := s.store.SetSetting("site_url", siteURL); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
@@ -551,4 +562,30 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.sqlite3")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	io.Copy(w, f)
+}
+
+// normalizeSiteURL checks the site address from Settings and trims it to
+// "scheme://host[:port][/path]" with no trailing slash. Blank is allowed.
+func normalizeSiteURL(v string) (string, error) {
+	if v == "" {
+		return "", nil
+	}
+	if !strings.Contains(v, "://") {
+		v = "https://" + v
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("Site address should look like https://maintenance.example.org")
+	}
+	return u.Scheme + "://" + u.Host + strings.TrimRight(u.Path, "/"), nil
+}
+
+// guessedURL is the address worked out from this request, shown in
+// Settings as a hint.
+func (s *Server) guessedURL(r *http.Request) string {
+	scheme := "http"
+	if s.isHTTPS(r) {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }

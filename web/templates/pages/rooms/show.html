@@ -9,6 +9,7 @@
   <div class="page-head__actions">
     <a class="btn btn--primary btn--sm" href="/items/new?room={{$r.ID}}">Add item</a>
     <a class="btn btn--sm" href="/report?room={{$r.ID}}">Report a problem</a>
+    <a class="btn btn--sm" href="/rooms/{{$r.ID}}/qr">QR code</a>
     <a class="btn btn--ghost btn--sm" href="/rooms/{{$r.ID}}/edit">Edit</a>
     {{template "delete-button" (dict "Action" (printf "/rooms/%d/delete" $r.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s? Items and supplies in this room will be kept and listed under the building." $r.Name))}}
   </div>

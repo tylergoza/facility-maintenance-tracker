@@ -28,6 +28,7 @@
     <div class="page-head__actions">
       <a class="btn btn--sm" href="/rooms/new?building={{$b.ID}}">Add room</a>
       <a class="btn btn--ghost btn--sm" href="/rooms/bulk?building={{$b.ID}}">Add several</a>
+      <a class="btn btn--ghost btn--sm" href="/buildings/{{$b.ID}}/qr">Print QR codes</a>
     </div>
   </div>
   {{if .Rooms}}

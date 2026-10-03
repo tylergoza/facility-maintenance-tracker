@@ -22,13 +22,14 @@ func (s *Server) reportAccess(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// absURL turns a path into a full URL on this site, for showing to admins.
+// absURL turns a path into a full URL on this site, for links and QR
+// codes used outside the app. It uses the site address from Settings when
+// set; otherwise it's worked out from the request.
 func (s *Server) absURL(r *http.Request, path string) string {
-	scheme := "http"
-	if s.isHTTPS(r) {
-		scheme = "https"
+	if base := s.SiteURL(); base != "" {
+		return base + path
 	}
-	return scheme + "://" + r.Host + path
+	return s.guessedURL(r) + path
 }
 
 // Reporting ----------------------------------------------------------------

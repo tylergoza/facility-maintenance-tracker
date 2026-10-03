@@ -49,6 +49,7 @@ func (s *Server) routes() http.Handler {
 	auth("GET /buildings/{id}/edit", s.handleBuildingEdit)
 	auth("POST /buildings/{id}", s.handleBuildingUpdate)
 	auth("POST /buildings/{id}/delete", s.handleBuildingDelete)
+	auth("GET /buildings/{id}/qr", s.handleBuildingQR)
 
 	auth("GET /rooms/new", s.handleRoomNew)
 	auth("POST /rooms", s.handleRoomCreate)
@@ -58,6 +59,7 @@ func (s *Server) routes() http.Handler {
 	auth("GET /rooms/{id}/edit", s.handleRoomEdit)
 	auth("POST /rooms/{id}", s.handleRoomUpdate)
 	auth("POST /rooms/{id}/delete", s.handleRoomDelete)
+	auth("GET /rooms/{id}/qr", s.handleRoomQR)
 
 	auth("GET /items", s.handleItems)
 	auth("GET /items/new", s.handleItemNew)

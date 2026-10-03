@@ -447,8 +447,24 @@ select:disabled { opacity: .6; }
 .unit-chip:has(input:checked) { border-color: var(--primary); background: var(--surface-2); font-weight: 700; }
 .unit-chip input { accent-color: var(--primary); }
 
+/* Printable QR codes for "Report a problem" */
+.qr-sheet { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin-top: 20px; }
+.qr-card {
+  background: #fff; color: #000; border: 1px dashed #999; border-radius: var(--radius);
+  padding: 16px; text-align: center; break-inside: avoid;
+}
+.qr-card p { margin: 0; }
+.qr-card .qr { display: block; width: 100%; max-width: 2.2in; margin: 8px auto; }
+.qr-card__lead { font-weight: 700; font-size: 1.1rem; }
+.qr-card__title { font-weight: 800; font-size: 1.25rem; margin-top: 4px; }
+.qr-card__sub { color: #444; }
+.qr-card__cta { margin-top: 8px; font-weight: 600; }
+.qr-card__url { font-size: .7rem; color: #555; word-break: break-all; margin-top: 4px; }
+
 @media print {
-  .topbar, .toolbar, .tiles, .task-card__actions, .page-head__actions, .footer, .btn { display: none !important; }
+  .topbar, .toolbar, .tiles, .task-card__actions, .page-head__actions, .footer, .btn, .no-print, .flash, .offline-banner { display: none !important; }
+  .qr-sheet { grid-template-columns: repeat(2, 1fr); margin: 0; }
+  .qr-card { border-color: #bbb; }
   .task-card, .card, .table-wrap { box-shadow: none; break-inside: avoid; }
   body { background: #fff; }
 }

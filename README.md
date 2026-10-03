@@ -32,8 +32,8 @@ go run . seed-demo
 | Mark done | Logs date, who, cost and notes, then rolls the task forward. Back-dated entries never move the schedule backwards. One-time tasks close. |
 | History | Per-item and site-wide maintenance logs, including ad-hoc "other work". |
 | Supplies | Counts of things that get used up (paper towels, filters, bulbs) or washed and reused (mop heads), with a history of every change and low-stock flags. Tasks can take a supply each time they're done. |
-| Problems | Report a problem against a building, room or item; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report at `/report` without signing in (off by default, 10 reports an hour per device, with a honeypot field for bots). |
-| Users | Admins manage users, settings (site name, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
+| Problems | Report a problem against a building, room or item; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report at `/report` without signing in (off by default, 10 reports an hour per device, with a honeypot field for bots). Room and building pages print QR codes that open the report form for that room. |
+| Users | Admins manage users, settings (site name, site address, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
 
 ## Stimulus autoloader
 
@@ -64,7 +64,7 @@ with an import map, so there are no CDN calls and it works offline.
 | `ADDR` | `-addr` | `:8080` | Listen address |
 | `DB_PATH` | `-db` | `data/maintenance.db` | SQLite file (created with migrations applied on start) |
 | `TZ` | | system | Facility time zone: decides what "today"/"overdue" means |
-| `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from Caddy/nginx |
+| `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from Caddy/nginx (needed for secure cookies and real client IPs behind a proxy) |
 | `DEV=1` | `-dev` | off | Load templates/static from disk |
 
 ## CLI

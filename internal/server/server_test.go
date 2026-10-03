@@ -726,3 +726,60 @@ func mustDate(t *testing.T, d string) time.Time {
 	}
 	return v
 }
+
+func TestSiteAddressAndQRCodes(t *testing.T) {
+	c, _ := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
+	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"104"}, "name": {"Nursery"}}, 200)
+	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Gym"}}, 200)
+
+	// No site address yet: codes use the address in use, with warnings.
+	sheet := c.get("/rooms/1/qr", 200)
+	for _, want := range []string{"<svg class=\"qr\"", c.base + "/report?room=1", "104 – Nursery", "Public reporting is off", "set the site address"} {
+		if !strings.Contains(sheet, want) {
+			t.Errorf("room QR page missing %q", want)
+		}
+	}
+
+	settings := url.Values{"site_name": {"Main"}, "due_soon_days": {"30"}, "public_reports": {"1"}}
+	for _, bad := range []string{"ftp://x.org", "https://", "https://x.org/?a=1", "https://me@x.org"} {
+		settings.Set("site_url", bad)
+		if body := c.post("/admin/settings", "/admin/settings", settings, 422); !strings.Contains(body, "Site address should look like") {
+			t.Errorf("site address %q should be refused", bad)
+		}
+	}
+	// A bare host means https; a trailing slash is trimmed.
+	settings.Set("site_url", "maint.example.org/")
+	c.post("/admin/settings", "/admin/settings", settings, 200)
+	if body := c.get("/admin/settings", 200); !strings.Contains(body, `value="https://maint.example.org"`) || !strings.Contains(body, "https://maint.example.org/report") {
+		t.Error("settings should show the normalized site address and use it for the report link")
+	}
+
+	sheet = c.get("/buildings/1/qr", 200)
+	for _, want := range []string{"https://maint.example.org/report?building=1", "https://maint.example.org/report?room=1", "https://maint.example.org/report?room=2", "Anywhere in the building"} {
+		if !strings.Contains(sheet, want) {
+			t.Errorf("building QR sheet missing %q", want)
+		}
+	}
+	if strings.Count(sheet, "<svg class=\"qr\"") != 3 || strings.Contains(sheet, "Public reporting is off") || strings.Contains(sheet, "set the site address") {
+		t.Error("building sheet should have 3 codes and no warnings")
+	}
+	// Clearing it goes back to the request's address.
+	settings.Set("site_url", "")
+	c.post("/admin/settings", "/admin/settings", settings, 200)
+	if !strings.Contains(c.get("/rooms/2/qr", 200), c.base+"/report?room=2") {
+		t.Error("blank site address should fall back to the request")
+	}
+}
+
+func TestQRSVG(t *testing.T) {
+	svg, err := qrSVG("https://example.org/report?room=1&x=<y>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(svg)
+	if !strings.HasPrefix(s, "<svg") || !strings.Contains(s, `aria-label="QR code for https://example.org/report?room=1&amp;x=&lt;y&gt;"`) || !strings.Contains(s, "<path d=\"M") {
+		t.Errorf("unexpected svg: %.200s", s)
+	}
+}

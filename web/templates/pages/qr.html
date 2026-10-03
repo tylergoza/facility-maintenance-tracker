@@ -1,0 +1,36 @@
+{{define "content"}}
+<div class="no-print">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="{{.Back}}">Back</a></nav>
+  <div class="page-head">
+    <div>
+      <h1>{{.Title}}</h1>
+      <p class="muted">Print and post where people will see it. Scanning opens "Report a problem" with the location filled in.</p>
+    </div>
+    <div class="page-head__actions">
+      <button type="button" class="btn btn--primary" data-controller="print" data-action="print#print">Print</button>
+    </div>
+  </div>
+  {{if not .PublicReports}}
+    <div class="alert alert--error" role="status">
+      Public reporting is off, so people who scan these will be asked to sign in.
+      {{if .User.IsAdmin}}<a href="/admin/settings">Turn it on in Settings</a>.{{else}}Ask an admin to turn it on.{{end}}
+    </div>
+  {{end}}
+  {{if not .SiteURLSet}}
+    <p class="hint">These codes use the address you're on now. If people reach this site at a different address (for example through a reverse proxy),
+      {{if .User.IsAdmin}}<a href="/admin/settings">set the site address</a>{{else}}ask an admin to set the site address{{end}} before printing.</p>
+  {{end}}
+</div>
+<div class="qr-sheet">
+  {{range .Cards}}
+    <div class="qr-card">
+      <p class="qr-card__lead">Something wrong here?</p>
+      {{.SVG}}
+      <p class="qr-card__title">{{.Title}}</p>
+      <p class="qr-card__sub">{{.Subtitle}}</p>
+      <p class="qr-card__cta">Scan to report a problem</p>
+      <p class="qr-card__url">{{.URL}}</p>
+    </div>
+  {{end}}
+</div>
+{{end}}
