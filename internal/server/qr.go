@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"rsc.io/qr"
+
+	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 )
 
 // qrSVG renders text as a QR code in SVG, so it prints sharply at any
@@ -55,47 +57,41 @@ func (s *Server) renderQRSheet(w http.ResponseWriter, r *http.Request, title, ba
 	})
 }
 
-// handleRoomQR prints one card that opens "Report a problem" for a room.
-func (s *Server) handleRoomQR(w http.ResponseWriter, r *http.Request) {
-	room, err := s.store.GetRoom(pathID(r))
+// handlePlaceQR prints a card that opens "Report a problem" for a place,
+// and with ?inside=1 one for everything inside it too, ready to cut out.
+func (s *Server) handlePlaceQR(w http.ResponseWriter, r *http.Request) {
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	card, err := s.newQRCard(r, room.Label(), room.BuildingName, fmt.Sprintf("/report?room=%d", room.ID))
-	if err != nil {
-		s.serverError(w, r, err)
+	p, ok := tree.Get(pathID(r))
+	if !ok {
+		s.notFound(w, r)
 		return
 	}
-	s.renderQRSheet(w, r, "QR code: "+room.Label(), fmt.Sprintf("/rooms/%d", room.ID), []qrCard{card})
-}
-
-// handleBuildingQR prints a card for the building as a whole plus one for
-// every room, ready to cut out.
-func (s *Server) handleBuildingQR(w http.ResponseWriter, r *http.Request) {
-	b, err := s.store.GetBuilding(pathID(r))
-	if err != nil {
-		s.serverError(w, r, err)
-		return
+	places := []store.Place{p}
+	title := "QR code: " + p.Label()
+	if r.URL.Query().Get("inside") == "1" {
+		places = append(places, tree.Inside(p.ID)...)
+		title = "QR codes: " + p.Label()
 	}
-	rooms, err := s.store.ListRooms(b.ID)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	card, err := s.newQRCard(r, b.Name, "Anywhere in the building", fmt.Sprintf("/report?building=%d", b.ID))
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	cards := []qrCard{card}
-	for _, room := range rooms {
-		card, err := s.newQRCard(r, room.Label(), b.Name, fmt.Sprintf("/report?room=%d", room.ID))
+	var cards []qrCard
+	for _, pl := range places {
+		// The subtitle says where it is: the places it's inside, or what
+		// kind of place it is when it's at the top.
+		where := pl.KindLabel()
+		if parent := tree.Path(pl.ParentID); parent != "" && pl.ParentID != 0 {
+			if site, single := tree.SingleSite(); !single || site.ID != pl.ParentID {
+				where = parent
+			}
+		}
+		card, err := s.newQRCard(r, pl.Label(), where, fmt.Sprintf("/report?place=%d", pl.ID))
 		if err != nil {
 			s.serverError(w, r, err)
 			return
 		}
 		cards = append(cards, card)
 	}
-	s.renderQRSheet(w, r, "QR codes: "+b.Name, fmt.Sprintf("/buildings/%d", b.ID), cards)
+	s.renderQRSheet(w, r, title, fmt.Sprintf("/places/%d", p.ID), cards)
 }

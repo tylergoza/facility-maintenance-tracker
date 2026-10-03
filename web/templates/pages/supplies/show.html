@@ -1,7 +1,7 @@
 {{define "content"}}
 {{$s := .Supply}}
 <nav class="crumbs" aria-label="Breadcrumb">
-  <a href="/supplies">Supplies</a> › <a href="/buildings/{{$s.BuildingID}}">{{$s.BuildingName}}</a>{{if $s.RoomID}} › <a href="/rooms/{{$s.RoomID}}">{{roomLabel $s.RoomNumber $s.RoomName}}</a>{{end}}
+  <a href="/supplies">Supplies</a> › <a href="/places/{{$s.PlaceID}}">{{$s.Location}}</a>
 </nav>
 <div class="page-head">
   <div>

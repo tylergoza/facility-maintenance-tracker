@@ -69,32 +69,227 @@ func TestCompareRoomNumbers(t *testing.T) {
 	}
 }
 
-func TestListRoomsOrdersByNumber(t *testing.T) {
-	s := openTest(t)
-	b := &Building{Name: "Sanctuary"}
-	must(t, s.SaveBuilding(b))
-	for _, r := range []Room{{Name: "Attic"}, {Number: "10", Name: "Office"}, {Number: " 9 ", Name: "Nursery"}} {
-		r.BuildingID = b.ID
-		must(t, s.SaveRoom(&r))
+// addPlace saves a place inside parent (nil for a site).
+func addPlace(t *testing.T, s *Store, parent *Place, kind, number, name string, tags ...string) *Place {
+	t.Helper()
+	p := &Place{Kind: kind, Number: number, Name: name, Tags: tags}
+	if parent != nil {
+		p.ParentID = parent.ID
 	}
-	rooms, err := s.ListRooms(b.ID)
+	must(t, s.SavePlace(p))
+	return p
+}
+
+// building adds a site and a building in it.
+func building(t *testing.T, s *Store, name string) *Place {
+	t.Helper()
+	return addPlace(t, s, addPlace(t, s, nil, KindSite, "", "Campus"), KindBuilding, "", name)
+}
+
+func TestPlaceTree(t *testing.T) {
+	s := openTest(t)
+	site := addPlace(t, s, nil, KindSite, "", "Grace Church")
+	main := addPlace(t, s, site, KindBuilding, "", "Main")
+	upstairs := addPlace(t, s, main, KindFloor, "", "2nd floor")
+	kids := addPlace(t, s, upstairs, KindZone, "", "Classrooms", "classrooms")
+	for _, r := range []Place{{Name: "Attic"}, {Number: "10", Name: "Office"}, {Number: " 9 ", Name: "Nursery"}} {
+		addPlace(t, s, kids, KindRoom, r.Number, r.Name)
+	}
+	porch := addPlace(t, s, main, KindZone, "", "Porch")
+	booth := addPlace(t, s, addPlace(t, s, main, KindRoom, "", "Sanctuary", "media"), KindArea, "", "Sound booth", "Media")
+
+	tree, err := s.Places()
 	must(t, err)
 	var got []string
-	for _, r := range rooms {
-		got = append(got, r.Label())
+	for _, p := range tree.All() {
+		got = append(got, p.Path)
 	}
-	if want := []string{"9 – Nursery", "10 – Office", "Attic"}; !slices.Equal(got, want) {
-		t.Fatalf("rooms = %q, want %q", got, want)
+	// One site is left out of paths; floors come before zones and rooms;
+	// numbered rooms come first, in number order.
+	want := []string{"Grace Church", "Main", "Main › 2nd floor", "Main › 2nd floor › Classrooms",
+		"Main › 2nd floor › Classrooms › 9 – Nursery", "Main › 2nd floor › Classrooms › 10 – Office", "Main › 2nd floor › Classrooms › Attic",
+		"Main › Porch", "Main › Sanctuary", "Main › Sanctuary › Sound booth"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("paths =\n%q\nwant\n%q", got, want)
+	}
+	if top := tree.Top(); len(top) != 1 || top[0].ID != main.ID {
+		t.Errorf("top = %+v", top)
+	}
+	if b, _ := tree.Building(booth.ID); b.ID != main.ID {
+		t.Errorf("building of booth = %+v", b)
+	}
+	if !tree.Within(booth.ID, main.ID) || tree.Within(main.ID, booth.ID) || !tree.Within(porch.ID, porch.ID) {
+		t.Error("Within is wrong")
+	}
+	if !tree.CanHold(main.ID, KindZone) || tree.CanHold(kids.ID, KindFloor) || tree.CanHold(0, KindBuilding) || !tree.CanHold(0, KindSite) {
+		t.Error("CanHold is wrong")
+	}
+	if tags := tree.Tags(); len(tags) != 2 || tags[0] != (TagCount{"classrooms", 1}) || tags[1] != (TagCount{"media", 2}) {
+		t.Errorf("tags = %+v", tags)
+	}
+
+	// Things anywhere inside a place show up for it; tags reach inside too.
+	item := &Item{PlaceID: booth.ID, Name: "Mixing console"}
+	must(t, s.SaveItem(item, nil, 0))
+	must(t, s.CreateProblem(&Problem{PlaceID: booth.ID, Title: "Hum"}))
+	for _, f := range []ItemFilter{{PlaceID: main.ID}, {PlaceID: site.ID}, {Tag: "MEDIA"}, {PlaceID: booth.ID, Direct: true}} {
+		if items, _ := s.ListItems(f); len(items) != 1 || items[0].Location() != "Main › Sanctuary › Sound booth" {
+			t.Errorf("%+v: items = %+v", f, items)
+		}
+	}
+	for _, f := range []ItemFilter{{PlaceID: main.ID, Direct: true}, {PlaceID: porch.ID}, {Tag: "classrooms"}} {
+		if items, _ := s.ListItems(f); len(items) != 0 {
+			t.Errorf("%+v: items = %+v", f, items)
+		}
+	}
+	if ps, _ := s.ListProblems(ProblemFilter{PlaceID: main.ID}); len(ps) != 1 {
+		t.Errorf("problems in main = %d", len(ps))
+	}
+	tree, _ = s.Places()
+	if p, _ := tree.Get(main.ID); p.ItemTotal != 1 || p.ItemCount != 0 || p.ProblemTotal != 1 || p.ChildCount != 3 {
+		t.Errorf("main counts = %+v", p)
+	}
+
+	// A second site shows up in paths.
+	addPlace(t, s, nil, KindSite, "", "North campus")
+	tree, _ = s.Places()
+	if got := tree.Path(booth.ID); got != "Grace Church › Main › Sanctuary › Sound booth" {
+		t.Errorf("path with two sites = %q", got)
+	}
+}
+
+func TestParseTags(t *testing.T) {
+	if got := ParseTags(" Classrooms,  kids   wing ,, classrooms,media"); !slices.Equal(got, []string{"Classrooms", "kids wing", "media"}) {
+		t.Errorf("tags = %q", got)
+	}
+}
+
+func TestDeletePlaceMovesThingsUp(t *testing.T) {
+	s := openTest(t)
+	main := building(t, s, "Main")
+	zone := addPlace(t, s, main, KindZone, "", "East wing", "kids")
+	room := addPlace(t, s, zone, KindRoom, "", "Nursery")
+	item := &Item{PlaceID: zone.ID, Name: "Exit sign"}
+	must(t, s.SaveItem(item, nil, 0))
+	sp := &Supply{PlaceID: zone.ID, Name: "Bulbs"}
+	must(t, s.SaveSupply(sp, 0))
+	p := &Problem{PlaceID: zone.ID, Title: "Dark"}
+	must(t, s.CreateProblem(p))
+
+	must(t, s.DeletePlace(zone.ID))
+	if got, _ := s.GetPlace(room.ID); got.ParentID != main.ID {
+		t.Errorf("room parent = %d", got.ParentID)
+	}
+	if got, _ := s.GetItem(item.ID); got.PlaceID != main.ID {
+		t.Errorf("item place = %d", got.PlaceID)
+	}
+	if got, _ := s.GetSupply(sp.ID); got.PlaceID != main.ID {
+		t.Errorf("supply place = %d", got.PlaceID)
+	}
+	if got, _ := s.GetProblem(p.ID); got.PlaceID != main.ID {
+		t.Errorf("problem place = %d", got.PlaceID)
+	}
+	var tags int
+	s.DB.QueryRow(`SELECT COUNT(*) FROM tags`).Scan(&tags)
+	if tags != 0 {
+		t.Error("unused tag should be removed")
+	}
+	// A site with things in it can't be deleted; an empty one can.
+	if err := s.DeletePlace(main.ParentID); !errors.Is(err, ErrPlaceNotEmpty) {
+		t.Errorf("err = %v", err)
+	}
+	empty := addPlace(t, s, nil, KindSite, "", "Empty")
+	must(t, s.DeletePlace(empty.ID))
+}
+
+func TestEnsureSite(t *testing.T) {
+	s := openTest(t)
+	id, err := s.EnsureSite("Grace Church")
+	must(t, err)
+	if again, _ := s.EnsureSite("Other"); again != id || id == 0 {
+		t.Errorf("EnsureSite = %d then %d", id, again)
+	}
+	addPlace(t, s, nil, KindSite, "", "North")
+	if id, _ := s.EnsureSite("x"); id != 0 {
+		t.Errorf("with two sites EnsureSite = %d, want 0", id)
+	}
+}
+
+// TestPlacesMigration upgrades a database with buildings and rooms.
+func TestPlacesMigration(t *testing.T) {
+	s, err := openAt(filepath.Join(t.TempDir(), "v9.db"), 9) // just before places
+	must(t, err)
+	defer s.Close()
+	for _, q := range []string{
+		`UPDATE settings SET value = 'Grace Church' WHERE key = 'site_name'`,
+		`INSERT INTO buildings (id, name, address) VALUES (1, 'Sanctuary', '1 Main St'), (2, 'Parsonage', '')`,
+		`INSERT INTO rooms (id, building_id, number, name, floor) VALUES (1, 1, '104', 'Nursery', '1st floor'), (2, 1, '', 'Office', '1st floor'), (3, 1, 'B1', 'Boiler', ''), (4, 2, '', 'Kitchen', '')`,
+		`INSERT INTO supplies (id, building_id, room_id, name, quantity) VALUES (1, 1, 1, 'Diapers', 4), (2, 2, NULL, 'Bulbs', 3)`,
+		`INSERT INTO items (id, building_id, room_id, name, supply_id, quantity) VALUES (1, 1, 1, 'Lights', 2, 6), (2, 1, NULL, 'Roof', NULL, 1)`,
+		`INSERT INTO tasks (id, item_id, name) VALUES (1, 2, 'Inspect')`,
+		`INSERT INTO maintenance_logs (id, item_id, task_id, performed_on) VALUES (1, 2, 1, '2026-01-01')`,
+		`INSERT INTO item_units (item_id, number, label) VALUES (1, 3, 'By the door')`,
+		`INSERT INTO problems (id, building_id, room_id, item_id, unit, title) VALUES (1, 1, 1, 1, 3, 'Light out'), (2, 2, NULL, NULL, NULL, 'Leak')`,
+		`INSERT INTO supply_changes (supply_id, kind, delta, quantity_after) VALUES (1, 'added', 4, 4)`,
+	} {
+		if _, err := s.DB.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	must(t, s.migrate(0))
+
+	tree, err := s.Places()
+	must(t, err)
+	var got []string
+	for _, p := range tree.All() {
+		got = append(got, p.KindLabel()+": "+p.Path)
+	}
+	want := []string{"Site: Grace Church", "Building: Parsonage", "Room: Parsonage › Kitchen", "Building: Sanctuary",
+		"Floor: Sanctuary › 1st floor", "Room: Sanctuary › 1st floor › 104 – Nursery", "Room: Sanctuary › 1st floor › Office", "Room: Sanctuary › B1 – Boiler"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("places =\n%q\nwant\n%q", got, want)
+	}
+	if it, _ := s.GetItem(1); it.Location() != "Sanctuary › 1st floor › 104 – Nursery" || it.Supply.Location() != "Parsonage" || it.Quantity != 6 {
+		t.Errorf("lights = %+v", it)
+	}
+	if it, _ := s.GetItem(2); it.Location() != "Sanctuary" || it.NextDue != "" {
+		t.Errorf("roof = %+v", it)
+	}
+	if p, _ := s.GetProblem(1); p.Location() != "Sanctuary › 1st floor › 104 – Nursery" || p.WhatLabel() != "Lights #3 – By the door" {
+		t.Errorf("problem = %+v", p)
+	}
+	if p, _ := s.GetProblem(2); p.Location() != "Parsonage" {
+		t.Errorf("problem 2 = %+v", p)
+	}
+	if logs, _ := s.ListLogs(LogFilter{ItemID: 2}); len(logs) != 1 || logs[0].TaskName != "Inspect" {
+		t.Errorf("logs = %+v", logs)
+	}
+	// Old links still find their place.
+	if id, _ := s.LegacyPlace(1, 0); tree.Path(id) != "Sanctuary" {
+		t.Errorf("building 1 = %d", id)
+	} else if b, _ := tree.Get(id); b.Address != "1 Main St" || b.Kind != KindBuilding {
+		t.Errorf("sanctuary = %+v", b)
+	}
+	if id, _ := s.LegacyPlace(0, 1); tree.Path(id) != "Sanctuary › 1st floor › 104 – Nursery" {
+		t.Errorf("room 1 = %d", id)
+	}
+	if id, _ := s.LegacyPlace(2, 0); tree.Path(id) != "Parsonage" {
+		t.Errorf("building 2 = %d", id)
+	}
+	// Foreign keys are back on: deleting an item still cascades.
+	must(t, s.DeleteItem(1))
+	var units int
+	s.DB.QueryRow(`SELECT COUNT(*) FROM item_units`).Scan(&units)
+	if units != 0 {
+		t.Error("foreign keys should be on after the migration")
 	}
 }
 
 func TestRecordMaintenanceRollsTaskForward(t *testing.T) {
 	s := openTest(t)
-	b := &Building{Name: "Sanctuary"}
-	must(t, s.SaveBuilding(b))
-	room := &Room{BuildingID: b.ID, Name: "Boiler room"}
-	must(t, s.SaveRoom(room))
-	item := &Item{BuildingID: b.ID, RoomID: room.ID, Name: "Furnace"}
+	b := building(t, s, "Sanctuary")
+	room := addPlace(t, s, b, KindRoom, "", "Boiler room")
+	item := &Item{PlaceID: room.ID, Name: "Furnace"}
 	must(t, s.SaveItem(item, nil, 0))
 
 	recurring := &Task{ItemID: item.ID, Name: "Filter", IntervalValue: 3, IntervalUnit: "months", NextDueOn: "2026-09-01", Active: true}
@@ -127,17 +322,17 @@ func TestRecordMaintenanceRollsTaskForward(t *testing.T) {
 		t.Fatalf("unexpected logs: %+v", logs)
 	}
 
-	items, err := s.ListItems(ItemFilter{BuildingID: b.ID})
+	items, err := s.ListItems(ItemFilter{PlaceID: b.ID})
 	must(t, err)
 	if len(items) != 1 || items[0].NextDue != "2026-12-15" {
 		t.Fatalf("item next due: %+v", items)
 	}
 
 	// Deleting the room keeps the item at building level.
-	must(t, s.DeleteRoom(room.ID))
+	must(t, s.DeletePlace(room.ID))
 	it, err := s.GetItem(item.ID)
 	must(t, err)
-	if it.RoomID != 0 || it.BuildingID != b.ID {
+	if it.PlaceID != b.ID {
 		t.Fatalf("item after room delete: %+v", it)
 	}
 }
@@ -177,11 +372,9 @@ func must(t *testing.T, err error) {
 
 func TestAdjustSupply(t *testing.T) {
 	s := openTest(t)
-	b := &Building{Name: "Sanctuary"}
-	must(t, s.SaveBuilding(b))
-	room := &Room{BuildingID: b.ID, Name: "Kitchen"}
-	must(t, s.SaveRoom(room))
-	sp := &Supply{BuildingID: b.ID, RoomID: room.ID, Name: "Paper towels", Unit: "rolls", Quantity: 5, ReorderAt: 2}
+	b := building(t, s, "Sanctuary")
+	room := addPlace(t, s, b, KindRoom, "", "Kitchen")
+	sp := &Supply{PlaceID: room.ID, Name: "Paper towels", Unit: "rolls", Quantity: 5, ReorderAt: 2}
 	must(t, s.SaveSupply(sp, 0))
 
 	steps := []struct {
@@ -228,17 +421,16 @@ func TestAdjustSupply(t *testing.T) {
 	}
 
 	// Deleting the room keeps the supply, building-wide.
-	must(t, s.DeleteRoom(room.ID))
-	if got, _ := s.GetSupply(sp.ID); got.RoomID != 0 || got.BuildingID != b.ID {
+	must(t, s.DeletePlace(room.ID))
+	if got, _ := s.GetSupply(sp.ID); got.PlaceID != b.ID {
 		t.Fatalf("supply after room delete: %+v", got)
 	}
 }
 
 func TestReusableSupply(t *testing.T) {
 	s := openTest(t)
-	b := &Building{Name: "Sanctuary"}
-	must(t, s.SaveBuilding(b))
-	sp := &Supply{BuildingID: b.ID, Name: "Mop heads", Reusable: true, Quantity: 4, InUse: 2, ReorderAt: 1}
+	b := building(t, s, "Sanctuary")
+	sp := &Supply{PlaceID: b.ID, Name: "Mop heads", Reusable: true, Quantity: 4, InUse: 2, ReorderAt: 1}
 	must(t, s.SaveSupply(sp, 0))
 
 	type counts struct{ clean, inUse, cleaning int }
@@ -287,11 +479,10 @@ func TestReusableSupply(t *testing.T) {
 
 func TestTaskUsesSupply(t *testing.T) {
 	s := openTest(t)
-	b := &Building{Name: "Sanctuary"}
-	must(t, s.SaveBuilding(b))
-	item := &Item{BuildingID: b.ID, Name: "Air return"}
+	b := building(t, s, "Sanctuary")
+	item := &Item{PlaceID: b.ID, Name: "Air return"}
 	must(t, s.SaveItem(item, nil, 0))
-	filters := &Supply{BuildingID: b.ID, Name: "Filters 20x25x1", Quantity: 3, ReorderAt: 1}
+	filters := &Supply{PlaceID: b.ID, Name: "Filters 20x25x1", Quantity: 3, ReorderAt: 1}
 	must(t, s.SaveSupply(filters, 0))
 	task := &Task{ItemID: item.ID, Name: "Replace filter", IntervalValue: 3, IntervalUnit: "months", Active: true, SupplyID: filters.ID, SupplyAmount: 2}
 	must(t, s.SaveTask(task))
@@ -342,38 +533,33 @@ func TestTaskUsesSupply(t *testing.T) {
 	}
 }
 
-func TestRoomMoveCarriesProblems(t *testing.T) {
+func TestPlaceMoveCarriesContents(t *testing.T) {
 	s := openTest(t)
-	a, b := &Building{Name: "A"}, &Building{Name: "B"}
-	must(t, s.SaveBuilding(a))
-	must(t, s.SaveBuilding(b))
-	room := &Room{BuildingID: a.ID, Name: "Hall"}
-	must(t, s.SaveRoom(room))
-	p := &Problem{BuildingID: a.ID, RoomID: room.ID, Title: "Flickering"}
+	a := building(t, s, "A")
+	b := addPlace(t, s, &Place{ID: a.ParentID}, KindBuilding, "", "B")
+	room := addPlace(t, s, a, KindRoom, "", "Hall")
+	p := &Problem{PlaceID: room.ID, Title: "Flickering"}
 	must(t, s.CreateProblem(p))
 
-	room.BuildingID = b.ID
-	must(t, s.SaveRoom(room))
-	if got, _ := s.GetProblem(p.ID); got.BuildingID != b.ID {
-		t.Errorf("problem stayed in building %d", got.BuildingID)
+	room.ParentID = b.ID
+	must(t, s.SavePlace(room))
+	if ps, _ := s.ListProblems(ProblemFilter{PlaceID: b.ID}); len(ps) != 1 || ps[0].Location() != "B › Hall" {
+		t.Errorf("problems in B = %+v", ps)
 	}
 }
 
 func TestMoveItem(t *testing.T) {
 	s := openTest(t)
-	b := &Building{Name: "Main"}
-	must(t, s.SaveBuilding(b))
-	r1, r2 := &Room{BuildingID: b.ID, Number: "104", Name: "Nursery"}, &Room{BuildingID: b.ID, Name: "Gym"}
-	must(t, s.SaveRoom(r1))
-	must(t, s.SaveRoom(r2))
-	item := &Item{BuildingID: b.ID, RoomID: r1.ID, Name: "Projector", Portable: true}
+	b := building(t, s, "Main")
+	r1, r2 := addPlace(t, s, b, KindRoom, "104", "Nursery"), addPlace(t, s, b, KindRoom, "", "Gym")
+	item := &Item{PlaceID: r1.ID, Name: "Projector", Portable: true}
 	must(t, s.SaveItem(item, nil, 0))
 
 	// Moving to where it already is records nothing.
-	must(t, s.MoveItem(Move{ItemID: item.ID, BuildingID: b.ID, RoomID: r1.ID, MovedOn: "2026-01-01"}))
-	must(t, s.MoveItem(Move{ItemID: item.ID, BuildingID: b.ID, RoomID: r2.ID, MovedOn: "2026-01-02", Note: "For the retreat"}))
-	if got, _ := s.GetItem(item.ID); got.RoomID != r2.ID {
-		t.Errorf("item in room %d, want %d", got.RoomID, r2.ID)
+	must(t, s.MoveItem(Move{ItemID: item.ID, PlaceID: r1.ID, MovedOn: "2026-01-01"}))
+	must(t, s.MoveItem(Move{ItemID: item.ID, PlaceID: r2.ID, MovedOn: "2026-01-02", Note: "For the retreat"}))
+	if got, _ := s.GetItem(item.ID); got.PlaceID != r2.ID {
+		t.Errorf("item in place %d, want %d", got.PlaceID, r2.ID)
 	}
 	logs, err := s.ListLogs(LogFilter{ItemID: item.ID})
 	if err != nil || len(logs) != 1 {
@@ -382,10 +568,8 @@ func TestMoveItem(t *testing.T) {
 	if l := logs[0]; l.Kind != "moved" || l.Notes != "Moved from Main › 104 – Nursery to Main › Gym.\nFor the retreat" {
 		t.Errorf("move log = %+v", l)
 	}
-	// A room in another building is refused.
-	other := &Building{Name: "Other"}
-	must(t, s.SaveBuilding(other))
-	if err := s.MoveItem(Move{ItemID: item.ID, BuildingID: other.ID, RoomID: r1.ID, MovedOn: "2026-01-03"}); !errors.Is(err, ErrNotFound) {
+	// A place that doesn't exist is refused.
+	if err := s.MoveItem(Move{ItemID: item.ID, PlaceID: 999, MovedOn: "2026-01-03"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }

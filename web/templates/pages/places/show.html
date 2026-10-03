@@ -1,0 +1,101 @@
+{{define "content"}}
+{{$p := .Place}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/places">Places</a>{{range .Crumbs}} › <a href="/places/{{.ID}}">{{.Label}}</a>{{end}}</nav>
+<div class="page-head">
+  <div>
+    <h1>{{$p.Label}}</h1>
+    <p class="muted">{{$p.KindLabel}}{{if $p.Address}} · {{$p.Address}}{{end}} {{template "tag-chips" $p.Tags}}</p>
+  </div>
+  <div class="page-head__actions">
+    <a class="btn btn--primary btn--sm" href="/items/new?place={{$p.ID}}">Add item</a>
+    <a class="btn btn--sm" href="/report?place={{$p.ID}}">Report a problem</a>
+    <a class="btn btn--sm" href="/places/{{$p.ID}}/qr">QR code</a>
+    <a class="btn btn--ghost btn--sm" href="/places/{{$p.ID}}/edit">Edit</a>
+    {{if $p.ParentID}}
+      {{template "delete-button" (dict "Action" (printf "/places/%d/delete" $p.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s? Anything in it (places, items, supplies, problems) moves up to %s." $p.Label .Parent.Label))}}
+    {{else}}
+      {{template "delete-button" (dict "Action" (printf "/places/%d/delete" $p.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s? A site can only be deleted once it's empty." $p.Label))}}
+    {{end}}
+  </div>
+</div>
+{{if $p.Notes}}<div class="card notes">{{range lines $p.Notes}}<p>{{.}}</p>{{end}}</div>{{end}}
+
+{{if .Problems}}
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>
+    <a class="btn btn--ghost btn--sm" href="/problems?place={{$p.ID}}">All problems</a>
+  </div>
+  {{template "problem-table" (dict "Problems" .Problems "ShowLocation" (gt (len .Children) 0))}}
+</section>
+{{end}}
+
+{{if $p.ChildKinds}}
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Inside {{$p.Label}} <span class="count">{{len .Children}}</span></h2>
+    <div class="page-head__actions">
+      <a class="btn btn--sm" href="/places/new?parent={{$p.ID}}">Add a place inside</a>
+      <a class="btn btn--ghost btn--sm" href="/places/bulk?parent={{$p.ID}}">Add several</a>
+      {{if .Children}}<a class="btn btn--ghost btn--sm" href="/places/{{$p.ID}}/qr?inside=1">Print QR codes for all</a>{{end}}
+    </div>
+  </div>
+  {{if .Children}}
+    <div class="card-grid card-grid--compact">
+      {{range .Children}}
+        <a class="card card--link" href="/places/{{.ID}}">
+          <strong>{{.Label}}</strong>
+          <span class="muted small">{{.KindLabel}} · {{pluralize .ItemTotal "item"}}{{if .ChildCount}} · {{.ChildCount}} inside{{end}}</span>
+          {{if .ProblemTotal}}<span><span class="badge badge--problem-open">{{pluralize .ProblemTotal "problem"}}</span></span>{{end}}
+        </a>
+      {{end}}
+    </div>
+  {{else}}
+    <p class="muted">Nothing inside yet. {{if eq $p.Kind "building"}}Add its rooms, and floors or zones (a wing, a hallway, a porch) if they help.{{else if eq $p.Kind "site"}}Add its buildings, and zones for outdoor spaces.{{else if eq $p.Kind "room"}}Add areas inside it, like a stage or a closet, if they help.{{end}}</p>
+  {{end}}
+</section>
+{{end}}
+
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">{{if .AllItems}}Items here and inside{{else}}Items{{end}} <span class="count">{{len .Items}}</span></h2>
+    {{if gt $p.ItemTotal $p.ItemCount}}
+      {{if .AllItems}}<a class="btn btn--ghost btn--sm" href="/places/{{$p.ID}}">Only items right here</a>
+      {{else}}<a class="btn btn--ghost btn--sm" href="/places/{{$p.ID}}?all=1">Include everything inside ({{$p.ItemTotal}})</a>{{end}}
+    {{end}}
+  </div>
+  {{if .AllItems}}
+    {{template "item-table" (dict "Items" .Items "ShowLocation" true "ShowCategory" true "Next" .URI)}}
+  {{else if .Items}}
+    {{template "item-groups" (dict "Groups" .ItemGroups "Next" .URI)}}
+  {{else}}
+    <p class="muted">Nothing tracked right here yet. Add equipment like a mini-split, and counts like 10 outlets or 15 lights with the bulbs they use.</p>
+  {{end}}
+</section>
+
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Supplies <span class="count">{{len .Supplies}}</span></h2>
+    <a class="btn btn--sm" href="/supplies/new?place={{$p.ID}}">Add supply</a>
+  </div>
+  {{if .Supplies}}
+    {{template "supply-table" (dict "Supplies" .Supplies "ShowLocation" .SupplyLocations "CSRF" .CSRF "Next" .URI)}}
+  {{else}}
+    <p class="muted">No supplies kept here yet.</p>
+  {{end}}
+</section>
+
+{{if .Tasks.Total}}
+<section class="section">
+  <h2 class="section__title">Maintenance here and inside</h2>
+  {{range .Tasks.Groups}}
+    {{if .Tasks}}
+      <h3 class="subhead">{{template "status-badge" .Status}} <span class="count">{{len .Tasks}}</span></h3>
+      <div class="task-list">
+        {{range .Tasks}}{{template "task-card" (dict "Task" . "User" $.User "Next" $.URI)}}{{end}}
+      </div>
+    {{end}}
+  {{end}}
+</section>
+{{end}}
+{{end}}

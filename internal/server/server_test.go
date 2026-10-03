@@ -88,10 +88,12 @@ func TestEndToEnd(t *testing.T) {
 		"password": {"a long password"}, "password_confirm": {"a long password"},
 	}, 200)
 
-	c.post("/buildings/new", "/buildings", url.Values{"name": {"Sanctuary"}, "address": {"1 Main St"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Nursery"}, "floor": {"1st"}}, 200)
-	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Smoke detector"}, "category": {"Safety"}}, 200)
-	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "name": {"Roof"}}, 200)
+	// The first building goes on a site made for it (place 1): the
+	// building is place 2 and its first room place 3.
+	c.post("/places/new", "/places", url.Values{"kind": {"building"}, "name": {"Sanctuary"}, "address": {"1 Main St"}}, 200)
+	c.post("/places/new?parent=2", "/places", url.Values{"kind": {"room"}, "parent_id": {"2"}, "name": {"Nursery"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Smoke detector"}, "category": {"Safety"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"2"}, "name": {"Roof"}}, 200)
 	c.post("/tasks/new?item=1", "/tasks", url.Values{
 		"item_id": {"1"}, "name": {"Test alarm"}, "recurring": {"1"}, "interval_value": {"6"}, "interval_unit": {"months"},
 		"last_completed_on": {"2020-01-01"},
@@ -103,71 +105,71 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("next due should be computed from last done: %+v %v", task, err)
 	}
 
-	// Room must belong to the chosen building.
-	c.post("/buildings/new", "/buildings", url.Values{"name": {"Parsonage"}}, 200)
-	if body := c.post("/items/new", "/items", url.Values{"building_id": {"2"}, "room_id": {"1"}, "name": {"X"}}, 422); !strings.Contains(body, "not in the selected building") {
-		t.Fatal("expected room/building validation error")
+	// Items need a place that exists.
+	if body := c.post("/items/new", "/items", url.Values{"place_id": {"99"}, "name": {"X"}}, 422); !strings.Contains(body, "Choose where it is") {
+		t.Fatal("expected place validation error")
 	}
 
 	// Every signed-in page renders.
 	for _, p := range []string{
-		"/", "/?building=1", "/buildings", "/buildings/1", "/buildings/1/edit", "/rooms/new", "/rooms/bulk?building=1", "/rooms/1", "/rooms/1/edit",
-		"/items", "/items?q=smoke&building=1", "/items/new", "/items/1", "/items/1/edit", "/items/1/log",
+		"/", "/?place=2", "/places", "/places/1", "/places/2", "/places/2/edit", "/places/new", "/places/new?kind=site", "/places/bulk?parent=2",
+		"/places/3", "/places/3/edit", "/places/2?all=1",
+		"/items", "/items?q=smoke&place=2", "/items/new", "/items/1", "/items/1/edit", "/items/1/log",
 		"/tasks/new?item=1", "/tasks/1/edit", "/tasks/1/complete", "/history", "/account",
 		"/admin/users", "/admin/users/new", "/admin/users/1/edit", "/admin/settings", "/offline",
 	} {
 		c.get(p, 200)
 	}
 
-	// Room numbers are shown and the dashboard orders by them, with
-	// building-wide items (no room) last.
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"9"}, "name": {"Office"}}, 200)
-	if !strings.Contains(c.get("/rooms/2", 200), "9 – Office") {
+	// Room numbers are shown and the dashboard goes room by room, with
+	// things for the whole building after its rooms.
+	c.post("/places/new?parent=2", "/places", url.Values{"kind": {"room"}, "parent_id": {"2"}, "number": {"9"}, "name": {"Office"}}, 200)
+	if !strings.Contains(c.get("/places/4", 200), "9 – Office") {
 		t.Error("room page should show the room number")
 	}
-	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"2"}, "name": {"Thermostat"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"4"}, "name": {"Thermostat"}}, 200)
 	c.post("/tasks/new?item=3", "/tasks", url.Values{"item_id": {"3"}, "name": {"Replace batteries"}}, 200)
 	if d := c.get("/", 200); strings.Index(d, "Replace batteries") > strings.Index(d, "Inspect shingles") {
 		t.Error("dashboard should list numbered rooms before building-wide items")
 	}
 
 	// Bulk add rooms: all-or-nothing, with per-line errors.
-	if body := c.post("/rooms/bulk?building=1", "/rooms/bulk", url.Values{"building_id": {"1"}, "rooms": {"201, Library\n202,"}}, 422); !strings.Contains(body, "Line 2") {
+	if body := c.post("/places/bulk?parent=2", "/places/bulk", url.Values{"parent_id": {"2"}, "kind": {"room"}, "lines": {"201, Library\n202,"}}, 422); !strings.Contains(body, "Line 2") {
 		t.Error("expected per-line error for missing room name")
 	}
-	if rooms, _ := st.ListRooms(1); len(rooms) != 2 {
-		t.Fatalf("failed bulk add should not save any rooms, got %d", len(rooms))
+	if tree, _ := st.Places(); len(tree.Children(2)) != 2 {
+		t.Fatalf("failed bulk add should not save any rooms, got %d", len(tree.Children(2)))
 	}
-	body := c.post("/rooms/bulk?building=1", "/rooms/bulk", url.Values{
-		"building_id": {"1"}, "floor": {"2nd"}, "rooms": {"201, Library\r\n\r\n202\tChoir Room\nAttic\n"},
+	body := c.post("/places/bulk?parent=2", "/places/bulk", url.Values{
+		"parent_id": {"2"}, "kind": {"room"}, "lines": {"201, Library\r\n\r\n202\tChoir Room\nAttic\n"},
 	}, 200)
 	for _, want := range []string{"3 rooms added", "201 – Library", "202 – Choir Room", "Attic"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("building page after bulk add missing %q", want)
 		}
 	}
-	if r, _ := st.GetRoom(4); r.Floor != "2nd" || r.Number != "202" || r.Name != "Choir Room" {
-		t.Errorf("bulk room not saved correctly: %+v", r)
+	if p, _ := st.GetPlace(6); p.Kind != "room" || p.ParentID != 2 || p.Number != "202" || p.Name != "Choir Room" {
+		t.Errorf("bulk room not saved correctly: %+v", p)
 	}
 
 	// Supplies: add one to a room, use and restock from the room page.
-	c.post("/supplies/new?room=1", "/supplies", url.Values{
-		"building_id": {"1"}, "room_id": {"1"}, "name": {"Diapers"}, "unit": {"packs"}, "quantity": {"2"}, "reorder_at": {"1"},
+	c.post("/supplies/new?place=3", "/supplies", url.Values{
+		"place_id": {"3"}, "name": {"Diapers"}, "unit": {"packs"}, "quantity": {"2"}, "reorder_at": {"1"},
 	}, 200)
-	for _, p := range []string{"/supplies", "/supplies?low=1&building=1&q=diap", "/supplies/new", "/supplies/1", "/supplies/1/edit"} {
+	for _, p := range []string{"/supplies", "/supplies?low=1&place=2&q=diap", "/supplies/new", "/supplies/1", "/supplies/1/edit"} {
 		c.get(p, 200)
 	}
-	if body := c.get("/rooms/1", 200); !strings.Contains(body, "Diapers") || !strings.Contains(body, "2 packs") {
+	if body := c.get("/places/3", 200); !strings.Contains(body, "Diapers") || !strings.Contains(body, "2 packs") {
 		t.Error("room page should list its supplies")
 	}
-	body = c.post("/rooms/1", "/supplies/1/adjust", url.Values{"kind": {"used"}, "amount": {"1"}, "next": {"/rooms/1"}}, 200)
+	body = c.post("/places/3", "/supplies/1/adjust", url.Values{"kind": {"used"}, "amount": {"1"}, "next": {"/places/3"}}, 200)
 	if !strings.Contains(body, "1 packs on hand. Time to reorder.") {
 		t.Error("using a supply should flash the new count and low warning")
 	}
 	if !strings.Contains(c.get("/", 200), "Supplies to restock") {
 		t.Error("dashboard should list low supplies")
 	}
-	if body := c.post("/rooms/1", "/supplies/1/adjust", url.Values{"kind": {"used"}, "amount": {"5"}, "next": {"/rooms/1"}}, 200); !strings.Contains(body, "has only 1 on hand") {
+	if body := c.post("/places/3", "/supplies/1/adjust", url.Values{"kind": {"used"}, "amount": {"5"}, "next": {"/places/3"}}, 200); !strings.Contains(body, "has only 1 on hand") {
 		t.Error("using more than on hand should be rejected")
 	}
 	c.post("/supplies/1", "/supplies/1/adjust", url.Values{"kind": {"restocked"}, "amount": {"6"}, "note": {"Costco run"}}, 200)
@@ -181,7 +183,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	// Editing details must not change the count.
 	c.post("/supplies/1/edit", "/supplies/1", url.Values{
-		"building_id": {"1"}, "room_id": {"1"}, "name": {"Diapers (size 3)"}, "quantity": {"99"},
+		"place_id": {"3"}, "name": {"Diapers (size 3)"}, "quantity": {"99"},
 	}, 200)
 	if sp, _ := st.GetSupply(1); sp.Quantity != 0 || sp.Name != "Diapers (size 3)" {
 		t.Errorf("edit changed supply unexpectedly: %+v", sp)
@@ -189,10 +191,10 @@ func TestEndToEnd(t *testing.T) {
 
 	// Reusable supplies: swap from the room page, then get them back.
 	c.post("/supplies/new", "/supplies", url.Values{
-		"building_id": {"1"}, "room_id": {"1"}, "name": {"Mop heads"}, "reusable": {"1"},
+		"place_id": {"3"}, "name": {"Mop heads"}, "reusable": {"1"},
 		"quantity": {"3"}, "in_use": {"1"}, "cleaning": {"0"},
 	}, 200)
-	body = c.post("/rooms/1", "/supplies/2/adjust", url.Values{"kind": {"swapped"}, "amount": {"1"}, "next": {"/rooms/1"}}, 200)
+	body = c.post("/places/3", "/supplies/2/adjust", url.Values{"kind": {"swapped"}, "amount": {"1"}, "next": {"/places/3"}}, 200)
 	if !strings.Contains(body, "Mop heads: 2 clean · 1 in use · 1 cleaning.") {
 		t.Error("swap should flash the new breakdown")
 	}
@@ -207,7 +209,7 @@ func TestEndToEnd(t *testing.T) {
 	c.post("/supplies/1", "/supplies/1/adjust", url.Values{"kind": {"swapped"}, "amount": {"1"}}, 200)
 
 	// A task that uses a supply: linked on the task form, taken when done.
-	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"Filters 20x25x1"}, "quantity": {"1"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"place_id": {"2"}, "name": {"Filters 20x25x1"}, "quantity": {"1"}}, 200)
 	c.post("/tasks/new?item=2", "/tasks", url.Values{"item_id": {"2"}, "name": {"Replace filter"}, "uses_supply": {"1"}, "supply_id": {"2"}, "supply_amount": {"1"}}, 422)
 	c.post("/tasks/new?item=2", "/tasks", url.Values{"item_id": {"2"}, "name": {"Replace filter"}, "uses_supply": {"1"}, "supply_id": {"3"}, "supply_amount": {"1"},
 		"recurring": {"1"}, "interval_value": {"3"}, "interval_unit": {"months"}}, 200)
@@ -253,7 +255,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Error("every-time task should pre-tick taking the supply")
 	}
 
-	if body := c.get("/supplies/3", 200); !strings.Contains(body, "Used by") || !strings.Contains(body, "Replace filter (Roof)") {
+	if body := c.get("/supplies/3", 200); !strings.Contains(body, "Used by") || !strings.Contains(body, "Replace filter (Roof, Sanctuary)") {
 		t.Error("supply page should list tasks using it and the history note")
 	}
 
@@ -296,7 +298,7 @@ func TestEndToEnd(t *testing.T) {
 	if strings.Contains(dash, "Mark done") || !strings.Contains(dash, "Test alarm") {
 		t.Error("public dashboard should show tasks without edit actions")
 	}
-	if body := c.get("/buildings", 200); !strings.Contains(body, "Sign in") {
+	if body := c.get("/places", 200); !strings.Contains(body, "Sign in") {
 		t.Error("expected login page")
 	}
 }
@@ -373,14 +375,12 @@ func TestParseMoney(t *testing.T) {
 func TestCountedItems(t *testing.T) {
 	c, st := newTestServer(t)
 	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
-	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"104"}, "name": {"Nursery"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Gym"}}, 200)
-	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"LED A19"}, "unit": {"bulbs"}, "quantity": {"3"}, "reorder_at": {"1"}}, 200)
-	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"Mop heads"}, "reusable": {"1"}, "quantity": {"2"}}, 200)
+	addPlaces(c, "building:Main", "room:2:104:Nursery", "room:2::Gym") // places 2, 3, 4
+	c.post("/supplies/new", "/supplies", url.Values{"place_id": {"2"}, "name": {"LED A19"}, "unit": {"bulbs"}, "quantity": {"3"}, "reorder_at": {"1"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"place_id": {"2"}, "name": {"Mop heads"}, "reusable": {"1"}, "quantity": {"2"}}, 200)
 
 	item := func(name, category, quantity string, extra url.Values) url.Values {
-		v := url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {name}, "category": {category}, "quantity": {quantity}, "supply_source": {"none"}}
+		v := url.Values{"place_id": {"3"}, "name": {name}, "category": {category}, "quantity": {quantity}, "supply_source": {"none"}}
 		for k, vs := range extra {
 			v[k] = vs
 		}
@@ -388,37 +388,37 @@ func TestCountedItems(t *testing.T) {
 	}
 
 	// Plain counts: 10 outlets, 3 switches.
-	c.post("/items/new?room=1", "/items", item("Electrical outlets", "Electrical", "10", nil), 200)
-	c.post("/items/new?room=1", "/items", item("Light switches", "Electrical", "3", nil), 200)
+	c.post("/items/new?place=3", "/items", item("Electrical outlets", "Electrical", "10", nil), 200)
+	c.post("/items/new?place=3", "/items", item("Light switches", "Electrical", "3", nil), 200)
 	if it, _ := st.GetItem(2); it.Quantity != 3 || it.SupplyID != 0 {
 		t.Errorf("switches = %+v", it)
 	}
 	// 15 lights using a bulb from supplies.
-	c.post("/items/new?room=1", "/items", item("Lights", "Lighting", "15", url.Values{"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}), 200)
+	c.post("/items/new?place=3", "/items", item("Lights", "Lighting", "15", url.Values{"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}), 200)
 	if body := c.post("/items/new", "/items", item("Lights", "", "1", url.Values{"supply_source": {"existing"}, "supply_id": {"2"}, "supply_per": {"1"}}), 422); !strings.Contains(body, "reusable") {
 		t.Error("expected reusable supply to be refused")
 	}
 	// 2 air returns using a new filter supply, added to the building.
-	c.post("/items/new?room=1", "/items", item("Air returns", "HVAC", "2", url.Values{"supply_source": {"new"}, "new_supply_name": {"Air filters 12x20x1"},
+	c.post("/items/new?place=3", "/items", item("Air returns", "HVAC", "2", url.Values{"supply_source": {"new"}, "new_supply_name": {"Air filters 12x20x1"},
 		"new_supply_unit": {"filters"}, "new_supply_quantity": {"1"}, "supply_per": {"1"}}), 200)
-	if sp, err := st.GetSupply(3); err != nil || sp.Name != "Air filters 12x20x1" || sp.Unit != "filters" || sp.Quantity != 1 || sp.BuildingID != 1 || sp.RoomID != 0 {
+	if sp, err := st.GetSupply(3); err != nil || sp.Name != "Air filters 12x20x1" || sp.Unit != "filters" || sp.Quantity != 1 || sp.PlaceID != 2 {
 		t.Fatalf("new filter supply = %+v, %v", sp, err)
 	}
 	if it, _ := st.GetItem(4); it.SupplyID != 3 || it.SupplyTotal() != 2 {
 		t.Errorf("air returns = %+v", it)
 	}
 	// A portable projector, and a blank count meaning 1.
-	c.post("/items/new?room=1", "/items", item("Projector", "Audio/Visual", "", url.Values{"portable": {"1"}}), 200)
+	c.post("/items/new?place=3", "/items", item("Projector", "Audio/Visual", "", url.Values{"portable": {"1"}}), 200)
 	if it, _ := st.GetItem(5); it.Quantity != 1 || !it.Portable {
 		t.Errorf("projector = %+v", it)
 	}
-	if body := c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "quantity": {"0"}, "supply_source": {"new"}}, 422); !strings.Contains(body, "Name is required") ||
+	if body := c.post("/items/new", "/items", url.Values{"place_id": {"2"}, "quantity": {"0"}, "supply_source": {"new"}}, 422); !strings.Contains(body, "Name is required") ||
 		!strings.Contains(body, "How many must be 1") || !strings.Contains(body, "name for the new supply") {
 		t.Error("expected name, count and supply validation errors")
 	}
 
 	// The room lists everything grouped by category with quick actions.
-	room := c.get("/rooms/1", 200)
+	room := c.get("/places/3", 200)
 	for _, want := range []string{"Audio/Visual", "Electrical", "HVAC", "Lighting", "Electrical outlets</strong></a> <span class=\"qty\">× 10", "LED A19", "/items/3/replace", "/items/5/move"} {
 		if !strings.Contains(room, want) {
 			t.Errorf("room page missing %q", want)
@@ -431,7 +431,7 @@ func TestCountedItems(t *testing.T) {
 		t.Error("outlets have no supply and aren't portable, so no quick actions")
 	}
 
-	for _, p := range []string{"/items/new", "/items/3", "/items/3/edit", "/items/3/replace", "/items/5/move", "/items", "/buildings/1"} {
+	for _, p := range []string{"/items/new", "/items/3", "/items/3/edit", "/items/3/replace", "/items/5/move", "/items", "/places/2"} {
 		c.get(p, 200)
 	}
 	if body := c.get("/supplies/1", 200); !strings.Contains(body, "Items that use it") || !strings.Contains(body, "15, 1 each (15 to replace them all)") {
@@ -449,7 +449,7 @@ func TestCountedItems(t *testing.T) {
 	}
 
 	// Replacing takes from supplies and returns to the room.
-	body := c.post("/items/3/replace", "/items/3/replace", url.Values{"performed_on": {"2026-01-10"}, "replaced": {"2"}, "took_supply": {"1"}, "next": {"/rooms/1"}}, 200)
+	body := c.post("/items/3/replace", "/items/3/replace", url.Values{"performed_on": {"2026-01-10"}, "replaced": {"2"}, "took_supply": {"1"}, "next": {"/places/3"}}, 200)
 	if !strings.Contains(body, "Recorded 2 × LED A19 replaced in Lights. 1 bulbs on hand. Time to reorder.") || !strings.Contains(body, "Last replaced Jan 10, 2026") {
 		t.Error("replacing should flash the new count and show the date on the room page")
 	}
@@ -487,15 +487,15 @@ func TestCountedItems(t *testing.T) {
 	}
 
 	// Moving a portable item records where it went.
-	body = c.post("/items/5/move", "/items/5/move", url.Values{"building_id": {"1"}, "room_id": {"2"}, "moved_on": {"2026-03-01"}, "note": {"Youth night"}, "next": {"/items/5"}}, 200)
+	body = c.post("/items/5/move", "/items/5/move", url.Values{"place_id": {"4"}, "moved_on": {"2026-03-01"}, "note": {"Youth night"}, "next": {"/items/5"}}, 200)
 	if !strings.Contains(body, "Projector moved to Main › Gym.") || !strings.Contains(body, "Moved from Main › 104 – Nursery to Main › Gym.") || !strings.Contains(body, "Youth night") {
 		t.Error("move should flash and appear in history")
 	}
-	if body := c.post("/items/5/move", "/items/5/move", url.Values{"building_id": {"1"}, "room_id": {"2"}, "moved_on": {"2026-03-02"}}, 422); !strings.Contains(body, "where it is now") {
+	if body := c.post("/items/5/move", "/items/5/move", url.Values{"place_id": {"4"}, "moved_on": {"2026-03-02"}}, 422); !strings.Contains(body, "where it is now") {
 		t.Error("moving to the same place should be refused")
 	}
-	// Changing the room on the edit form is recorded as a move too.
-	c.post("/items/5/edit", "/items/5", item("Projector", "Audio/Visual", "1", url.Values{"room_id": {"1"}, "portable": {"1"}}), 200)
+	// Changing the place on the edit form is recorded as a move too.
+	c.post("/items/5/edit", "/items/5", item("Projector", "Audio/Visual", "1", url.Values{"portable": {"1"}}), 200)
 	if logs, _ := st.ListLogs(store.LogFilter{ItemID: 5}); len(logs) != 2 || logs[0].Kind != "moved" {
 		t.Errorf("edit should record a move: %+v", logs)
 	}
@@ -507,25 +507,28 @@ func TestCountedItems(t *testing.T) {
 func TestProblems(t *testing.T) {
 	c, st := newTestServer(t)
 	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
-	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"110"}, "name": {"Kitchen"}}, 200)
-	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Sink"}}, 200)
+	addPlaces(c, "building:Main", "room:2:110:Kitchen") // places 2, 3
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Sink"}}, 200)
 
-	if !strings.Contains(c.get("/report?item=1", 200), `value="1" data-building-id="1" data-room-id="1" selected>Sink`) {
+	if body := c.get("/report?item=1", 200); !strings.Contains(body, `value="1" data-lineage="3 2 1" selected>Sink (110 – Kitchen)`) ||
+		!strings.Contains(body, `value="3" data-path="Main › 110 – Kitchen" data-level="4" selected>`) {
 		t.Error("report form should be preset from the item")
 	}
-	body := c.post("/report", "/report", url.Values{"building_id": {"1"}, "room_id": {"1"}, "item_id": {"1"}, "title": {"Faucet dripping"}, "details": {"Hot side"}}, 200)
+	body := c.post("/report", "/report", url.Values{"place_id": {"2"}, "item_id": {"1"}, "title": {"Faucet dripping"}, "details": {"Hot side"}}, 200)
 	for _, want := range []string{"Problem reported.", "Faucet dripping", "Nobody is on it yet", "by Alex", "Sink"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("problem page missing %q", want)
 		}
 	}
-	for _, p := range []string{"/", "/rooms/1", "/items/1", "/buildings/1", "/problems"} {
+	if p, _ := st.GetProblem(1); p.PlaceID != 3 {
+		t.Errorf("naming the item should put the problem where it is: place %d", p.PlaceID)
+	}
+	for _, p := range []string{"/", "/places/3", "/items/1", "/places/2", "/places/1", "/problems"} {
 		if !strings.Contains(c.get(p, 200), "Faucet dripping") {
 			t.Errorf("%s should list the open problem", p)
 		}
 	}
-	for _, p := range []string{"/problems/1/edit", "/problems?status=all&building=1&mine=1", "/report?room=1", "/admin/settings"} {
+	for _, p := range []string{"/problems/1/edit", "/problems?status=all&place=2&mine=1", "/report?place=3", "/admin/settings"} {
 		c.get(p, 200)
 	}
 
@@ -556,8 +559,8 @@ func TestProblems(t *testing.T) {
 		t.Error("timeline should show unassigning")
 	}
 	c.post("/problems/1", "/problems/1/update", url.Values{"status": {"bogus"}, "assigned_to": {"0"}}, 200)
-	c.post("/problems/1/edit", "/problems/1", url.Values{"building_id": {"1"}, "title": {"Kitchen faucet dripping"}, "reporter_name": {"Alex"}}, 200)
-	if p, _ := st.GetProblem(1); p.Title != "Kitchen faucet dripping" || p.RoomID != 0 || p.ItemID != 0 {
+	c.post("/problems/1/edit", "/problems/1", url.Values{"place_id": {"2"}, "title": {"Kitchen faucet dripping"}, "reporter_name": {"Alex"}}, 200)
+	if p, _ := st.GetProblem(1); p.Title != "Kitchen faucet dripping" || p.PlaceID != 2 || p.ItemID != 0 {
 		t.Errorf("edited problem = %+v", p)
 	}
 
@@ -578,18 +581,18 @@ func TestProblems(t *testing.T) {
 	}
 	c.post("/", "/logout", url.Values{}, 200)
 
-	body = c.get("/report?room=1", 200)
+	body = c.get("/report?place=3", 200)
 	if !strings.Contains(body, "Your name") || !strings.Contains(body, `href="/report"`) {
 		t.Error("visitors should get the report form and a nav link to it")
 	}
-	if body := c.post("/report", "/report", url.Values{"building_id": {"1"}, "title": {"Light out"}}, 422); !strings.Contains(body, "Enter your name") {
+	if body := c.post("/report", "/report", url.Values{"place_id": {"2"}, "title": {"Light out"}}, 422); !strings.Contains(body, "Enter your name") {
 		t.Error("visitors must give their name")
 	}
-	report := url.Values{"building_id": {"1"}, "room_id": {"1"}, "title": {"Light out"}, "reporter_name": {"Pat"}, "reporter_contact": {"555-1234"}, "item_id": {"1"}}
+	report := url.Values{"place_id": {"3"}, "title": {"Light out"}, "reporter_name": {"Pat"}, "reporter_contact": {"555-1234"}, "item_id": {"1"}}
 	if body := c.post("/report", "/report", report, 200); !strings.Contains(body, "Thanks!") {
 		t.Error("visitor report should thank them")
 	}
-	if p, _ := st.GetProblem(2); p.ReporterName != "Pat" || p.ReporterContact != "555-1234" || p.ReportedBy != 0 || p.ItemID != 1 || p.RoomID != 1 {
+	if p, _ := st.GetProblem(2); p.ReporterName != "Pat" || p.ReporterContact != "555-1234" || p.ReportedBy != 0 || p.ItemID != 1 || p.PlaceID != 3 {
 		t.Errorf("visitor report = %+v", p)
 	}
 	// Honeypot: looks like it worked, saves nothing.
@@ -617,10 +620,9 @@ func TestProblems(t *testing.T) {
 func TestUnits(t *testing.T) {
 	c, st := newTestServer(t)
 	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
-	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Hall"}}, 200)
-	c.post("/supplies/new", "/supplies", url.Values{"building_id": {"1"}, "name": {"LED A19"}, "unit": {"bulbs"}, "quantity": {"10"}}, 200)
-	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Lights"}, "quantity": {"4"},
+	addPlaces(c, "building:Main", "room:2::Hall") // places 2, 3
+	c.post("/supplies/new", "/supplies", url.Values{"place_id": {"2"}, "name": {"LED A19"}, "unit": {"bulbs"}, "quantity": {"10"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Lights"}, "quantity": {"4"},
 		"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}, 200)
 
 	// Location notes for the numbered units.
@@ -669,7 +671,7 @@ func TestUnits(t *testing.T) {
 
 	// A problem reported against the group, narrowed to one unit by staff,
 	// then fixed from the problem page.
-	c.post("/report", "/report", url.Values{"building_id": {"1"}, "room_id": {"1"}, "item_id": {"1"}, "title": {"Light out"}}, 200)
+	c.post("/report", "/report", url.Values{"place_id": {"3"}, "item_id": {"1"}, "title": {"Light out"}}, 200)
 	body = c.post("/problems/1", "/problems/1/unit", url.Values{"unit": {"3"}}, 200)
 	if !strings.Contains(body, "Noted: it&#39;s #3.") || !strings.Contains(body, "It&#39;s #3 – Over the stage.") || !strings.Contains(body, "Replace #3") {
 		t.Error("setting the unit should show in the timeline and offer to replace it")
@@ -696,14 +698,14 @@ func TestUnits(t *testing.T) {
 		t.Errorf("problem after fix = %+v", p)
 	}
 	// Log work from a problem resolves it too.
-	c.post("/report", "/report", url.Values{"building_id": {"1"}, "item_id": {"1"}, "title": {"Buzzing"}}, 200)
+	c.post("/report", "/report", url.Values{"place_id": {"2"}, "item_id": {"1"}, "title": {"Buzzing"}}, 200)
 	c.post("/items/1/log?problem=2", "/items/1/log", url.Values{"performed_on": {"2026-05-05"}, "notes": {"Replaced dimmer"}, "problem": {"2"}}, 200)
 	if p, _ := st.GetProblem(2); p.Status != store.ProblemResolved {
 		t.Errorf("problem 2 should be resolved: %+v", p)
 	}
 
 	// Fewer units: #3 and #4 drop out of pickers, their history stays.
-	c.post("/items/1/edit", "/items/1", url.Values{"building_id": {"1"}, "room_id": {"1"}, "name": {"Lights"}, "quantity": {"2"},
+	c.post("/items/1/edit", "/items/1", url.Values{"place_id": {"3"}, "name": {"Lights"}, "quantity": {"2"},
 		"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}, 200)
 	if strings.Contains(c.get("/items/1/replace", 200), `name="units" value="3"`) {
 		t.Error("units beyond the count should not be offered")
@@ -712,9 +714,24 @@ func TestUnits(t *testing.T) {
 		t.Error("history should keep units no longer counted")
 	}
 	// Single items have no units.
-	c.post("/items/new", "/items", url.Values{"building_id": {"1"}, "name": {"Furnace"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"2"}, "name": {"Furnace"}}, 200)
 	if strings.Contains(c.get("/items/2/log", 200), "Which ones") {
 		t.Error("single items should not offer a unit picker")
+	}
+}
+
+// addPlaces adds places through the form, in order. Each is
+// "kind:parent:number:name", or "building:Name" for a building on the site.
+func addPlaces(c *client, specs ...string) {
+	c.t.Helper()
+	for _, spec := range specs {
+		parts := strings.Split(spec, ":")
+		v := url.Values{"kind": {parts[0]}, "name": {parts[len(parts)-1]}}
+		if len(parts) == 4 {
+			v.Set("parent_id", parts[1])
+			v.Set("number", parts[2])
+		}
+		c.post("/places/new", "/places", v, 200)
 	}
 }
 
@@ -730,13 +747,11 @@ func mustDate(t *testing.T, d string) time.Time {
 func TestSiteAddressAndQRCodes(t *testing.T) {
 	c, _ := newTestServer(t)
 	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
-	c.post("/buildings/new", "/buildings", url.Values{"name": {"Main"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "number": {"104"}, "name": {"Nursery"}}, 200)
-	c.post("/rooms/new?building=1", "/rooms", url.Values{"building_id": {"1"}, "name": {"Gym"}}, 200)
+	addPlaces(c, "building:Main", "room:2:104:Nursery", "room:2::Gym") // places 2, 3, 4
 
 	// No site address yet: codes use the address in use, with warnings.
-	sheet := c.get("/rooms/1/qr", 200)
-	for _, want := range []string{"<svg class=\"qr\"", c.base + "/report?room=1", "104 – Nursery", "Public reporting is off", "set the site address"} {
+	sheet := c.get("/places/3/qr", 200)
+	for _, want := range []string{"<svg class=\"qr\"", c.base + "/report?place=3", "104 – Nursery", "Public reporting is off", "set the site address"} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("room QR page missing %q", want)
 		}
@@ -756,8 +771,9 @@ func TestSiteAddressAndQRCodes(t *testing.T) {
 		t.Error("settings should show the normalized site address and use it for the report link")
 	}
 
-	sheet = c.get("/buildings/1/qr", 200)
-	for _, want := range []string{"https://maint.example.org/report?building=1", "https://maint.example.org/report?room=1", "https://maint.example.org/report?room=2", "Anywhere in the building"} {
+	sheet = c.get("/places/2/qr?inside=1", 200)
+	for _, want := range []string{"https://maint.example.org/report?place=2", "https://maint.example.org/report?place=3", "https://maint.example.org/report?place=4",
+		`<p class="qr-card__sub">Building</p>`, `<p class="qr-card__sub">Main</p>`} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("building QR sheet missing %q", want)
 		}
@@ -768,7 +784,7 @@ func TestSiteAddressAndQRCodes(t *testing.T) {
 	// Clearing it goes back to the request's address.
 	settings.Set("site_url", "")
 	c.post("/admin/settings", "/admin/settings", settings, 200)
-	if !strings.Contains(c.get("/rooms/2/qr", 200), c.base+"/report?room=2") {
+	if !strings.Contains(c.get("/places/4/qr", 200), c.base+"/report?place=4") {
 		t.Error("blank site address should fall back to the request")
 	}
 }
@@ -781,5 +797,120 @@ func TestQRSVG(t *testing.T) {
 	s := string(svg)
 	if !strings.HasPrefix(s, "<svg") || !strings.Contains(s, `aria-label="QR code for https://example.org/report?room=1&amp;x=&lt;y&gt;"`) || !strings.Contains(s, "<path d=\"M") {
 		t.Errorf("unexpected svg: %.200s", s)
+	}
+}
+
+func TestPlaces(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"site_name": {"Grace Church"}, "username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	// Site 1 is made for the first building (2).
+	addPlaces(c, "building:Main", "floor:2::2nd floor", "zone:3::Classrooms", "room:4:201:Nursery", "room:2::Sanctuary", "area:6::Stage")
+	if site, _ := st.GetPlace(1); site.Kind != "site" || site.Name != "Grace Church" {
+		t.Fatalf("site = %+v", site)
+	}
+	c.post("/places/4/edit", "/places/4", url.Values{"kind": {"zone"}, "parent_id": {"3"}, "name": {"Classrooms"}, "tags": {"classrooms, Kids,  kids "}}, 200)
+	if p, _ := st.GetPlace(4); strings.Join(p.Tags, "|") != "classrooms|Kids" {
+		t.Errorf("tags = %q", p.Tags)
+	}
+
+	// The tree rules: only higher levels hold lower ones, and nothing goes
+	// inside itself.
+	for _, bad := range []struct {
+		path string
+		form url.Values
+		want string
+	}{
+		{"/places", url.Values{"kind": {"room"}, "parent_id": {"7"}, "name": {"Closet"}}, "A room can&#39;t go inside an area"},
+		{"/places", url.Values{"kind": {"building"}, "parent_id": {"5"}, "name": {"Shed"}}, "A building can&#39;t go inside a room"},
+		{"/places", url.Values{"kind": {"castle"}, "parent_id": {"2"}, "name": {"X"}}, "Choose what kind of place it is"},
+		{"/places/4", url.Values{"kind": {"area"}, "parent_id": {"3"}, "name": {"Classrooms"}}, "201 – Nursery (a room) is inside it, so it can&#39;t be an area"},
+		{"/places/3", url.Values{"kind": {"floor"}, "parent_id": {"4"}, "name": {"2nd floor"}}, "can&#39;t go inside itself"},
+		{"/places/bulk", url.Values{"kind": {"building"}, "parent_id": {"5"}, "lines": {"Shed"}}, "A building can&#39;t go inside a room"},
+	} {
+		if body := c.post("/places/new", bad.path, bad.form, 422); !strings.Contains(body, bad.want) {
+			t.Errorf("%s %v: missing %q", bad.path, bad.form, bad.want)
+		}
+	}
+
+	// Things inside a place show up on it.
+	c.post("/items/new", "/items", url.Values{"place_id": {"5"}, "name": {"Crib"}}, 200)
+	c.post("/report", "/report", url.Values{"place_id": {"5"}, "title": {"Crib wobbles"}}, 200)
+	main := c.get("/places/2", 200)
+	for _, want := range []string{"Crib wobbles", "Include everything inside (1)", "2nd floor", "Sanctuary"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("building page missing %q", want)
+		}
+	}
+	if body := c.get("/places/2?all=1", 200); !strings.Contains(body, "Main › 2nd floor › Classrooms › 201 – Nursery") {
+		t.Error("everything-inside view should list the crib with where it is")
+	}
+	index := c.get("/places", 200)
+	for _, want := range []string{"Whole site", `href="/places?tag=classrooms"`, "tree__row--d3", "1 problem"} {
+		if !strings.Contains(index, want) {
+			t.Errorf("places index missing %q", want)
+		}
+	}
+
+	// Tags gather places and what's in them.
+	tag := c.get("/places?tag=KIDS", 200)
+	if !strings.Contains(tag, "Classrooms") || !strings.Contains(tag, "Crib wobbles") || !strings.Contains(tag, "1 item in them") {
+		t.Error("tag page should list tagged places and their problems")
+	}
+	c.get("/places?tag=nope", 404)
+	if !strings.Contains(c.get("/items?tag=kids", 200), "Crib") || strings.Contains(c.get("/items?tag=classrooms&place=6", 200), "Crib") {
+		t.Error("items should filter by tag and place")
+	}
+	if !strings.Contains(c.get("/problems?tag=kids", 200), "Crib wobbles") {
+		t.Error("problems should filter by tag")
+	}
+
+	// Moving a place takes everything in it along.
+	body := c.post("/places/4/edit", "/places/4", url.Values{"kind": {"zone"}, "parent_id": {"2"}, "name": {"Classrooms"}, "tags": {"kids"}}, 200)
+	if !strings.Contains(body, "Moved, along with everything in it.") {
+		t.Error("moving a place should say so")
+	}
+	if it, _ := st.GetItem(1); it.Location() != "Main › Classrooms › 201 – Nursery" {
+		t.Errorf("crib is at %q", it.Location())
+	}
+	// Deleting a place moves what was in it up a level.
+	body = c.post("/places/4", "/places/4/delete", url.Values{}, 200)
+	if !strings.Contains(body, "Anything that was in it is now here.") || !strings.Contains(body, "201 – Nursery") {
+		t.Error("deleting a place should land on its parent with its contents")
+	}
+	if it, _ := st.GetItem(1); it.Location() != "Main › 201 – Nursery" {
+		t.Errorf("crib is at %q", it.Location())
+	}
+	if body := c.post("/places/1", "/places/1/delete", url.Values{}, 200); !strings.Contains(body, "still has things in it") {
+		t.Error("a site with things in it can't be deleted")
+	}
+
+	// Several areas at once inside a room.
+	if body := c.post("/places/bulk?parent=5", "/places/bulk", url.Values{"parent_id": {"5"}, "kind": {"area"}, "lines": {"Closet\nChanging table"}}, 200); !strings.Contains(body, "2 areas added") {
+		t.Error("bulk add of areas")
+	}
+
+	// With a second site, sites show in paths and new buildings need one.
+	c.post("/places/new?kind=site", "/places", url.Values{"kind": {"site"}, "name": {"North campus"}, "address": {"9 North Rd"}}, 200)
+	if body := c.post("/places/new", "/places", url.Values{"kind": {"building"}, "name": {"Barn"}}, 422); !strings.Contains(body, "Choose where it is") {
+		t.Error("with two sites a building needs a site")
+	}
+	if it, _ := st.GetItem(1); it.Location() != "Grace Church › Main › 201 – Nursery" {
+		t.Errorf("with two sites the crib is at %q", it.Location())
+	}
+	if !strings.Contains(c.get("/places", 200), "North campus") {
+		t.Error("index should list both sites")
+	}
+
+	// Links and QR codes from before places still work.
+	st.DB.Exec(`UPDATE places SET building_id = 7 WHERE id = 2`)
+	st.DB.Exec(`UPDATE places SET room_id = 9 WHERE id = 5`)
+	if body := c.get("/rooms/9", 200); !strings.Contains(body, "<h1>201 – Nursery</h1>") {
+		t.Error("/rooms/9 should lead to the room it became")
+	}
+	if body := c.get("/buildings/7/qr", 200); strings.Count(body, `<svg class="qr"`) < 3 {
+		t.Error("/buildings/7/qr should print the building's codes")
+	}
+	if body := c.get("/report?room=9", 200); !strings.Contains(body, `value="5" data-path="Grace Church › Main › 201 – Nursery" data-level="4" selected>`) {
+		t.Error("old room QR codes should preselect the room")
 	}
 }

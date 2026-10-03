@@ -35,14 +35,11 @@ func validProblemStatus(status string) bool {
 }
 
 // Problem is something someone reported: a leak, a door that sticks, a
-// light out. It belongs to a building and optionally a room and item.
+// light out. It belongs to a place and optionally an item there.
 type Problem struct {
 	ID              int64
-	BuildingID      int64
-	BuildingName    string
-	RoomID          int64
-	RoomNumber      string
-	RoomName        string
+	PlaceID         int64
+	Place           Place // where it is, with its path
 	ItemID          int64
 	ItemName        string
 	ItemQuantity    int
@@ -80,43 +77,38 @@ func (p Problem) WhatLabel() string {
 }
 func (p Problem) Active() bool { return p.Status != ProblemResolved }
 
-func (p Problem) Location() string {
-	if p.RoomName != "" {
-		return p.BuildingName + " › " + RoomLabel(p.RoomNumber, p.RoomName)
-	}
-	return p.BuildingName
-}
+// Location renders where it is: "Main Building › Kitchen".
+func (p Problem) Location() string { return p.Place.Path }
 
 // ProblemFilter narrows ListProblems. Status is "" for all, "active" for
 // open and in progress, or a single status.
 type ProblemFilter struct {
-	BuildingID int64
-	RoomID     int64
+	PlaceID    int64 // in this place or anywhere inside it
+	Tag        string
 	ItemID     int64
 	AssignedTo int64
 	Status     string
 }
 
 const problemSelect = `
-	SELECT p.id, p.building_id, b.name, COALESCE(p.room_id, 0), COALESCE(r.number, ''), COALESCE(r.name, ''),
+	SELECT p.id, p.place_id,
 	       COALESCE(p.item_id, 0), COALESCE(i.name, ''), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(iu.label, ''),
 	       p.title, p.details, p.status,
 	       COALESCE(p.assigned_to, 0), COALESCE(NULLIF(a.display_name, ''), a.username, ''),
 	       COALESCE(p.reported_by, 0), p.reporter_name, p.reporter_contact,
 	       p.created_at, p.updated_at, COALESCE(p.resolved_at, '')
 	FROM problems p
-	JOIN buildings b ON b.id = p.building_id
-	LEFT JOIN rooms r ON r.id = p.room_id
 	LEFT JOIN items i ON i.id = p.item_id
 	LEFT JOIN item_units iu ON iu.item_id = p.item_id AND iu.number = p.unit
 	LEFT JOIN users a ON a.id = p.assigned_to`
 
-func scanProblems(rows *sql.Rows) ([]Problem, error) {
+// scanProblems reads problems and fills in where they are.
+func (s *Store) scanProblems(rows *sql.Rows) ([]Problem, error) {
 	defer rows.Close()
 	var out []Problem
 	for rows.Next() {
 		var p Problem
-		if err := rows.Scan(&p.ID, &p.BuildingID, &p.BuildingName, &p.RoomID, &p.RoomNumber, &p.RoomName,
+		if err := rows.Scan(&p.ID, &p.PlaceID,
 			&p.ItemID, &p.ItemName, &p.ItemQuantity, &p.Unit, &p.UnitLabel, &p.Title, &p.Details, &p.Status,
 			&p.AssignedTo, &p.AssignedName, &p.ReportedBy, &p.ReporterName, &p.ReporterContact,
 			&p.CreatedAt, &p.UpdatedAt, &p.ResolvedAt); err != nil {
@@ -124,7 +116,18 @@ func scanProblems(rows *sql.Rows) ([]Problem, error) {
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	t, err := loadPlaces(s.DB)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Place, _ = t.Get(out[i].PlaceID)
+	}
+	return out, nil
 }
 
 // ListProblems returns open problems first, then in progress, then
@@ -132,14 +135,7 @@ func scanProblems(rows *sql.Rows) ([]Problem, error) {
 func (s *Store) ListProblems(f ProblemFilter) ([]Problem, error) {
 	q := problemSelect + ` WHERE 1=1`
 	var args []any
-	if f.BuildingID != 0 {
-		q += ` AND p.building_id = ?`
-		args = append(args, f.BuildingID)
-	}
-	if f.RoomID != 0 {
-		q += ` AND p.room_id = ?`
-		args = append(args, f.RoomID)
-	}
+	q, args = placeFilter(q, args, "p.place_id", f.PlaceID, false, f.Tag)
 	if f.ItemID != 0 {
 		q += ` AND p.item_id = ?`
 		args = append(args, f.ItemID)
@@ -161,7 +157,7 @@ func (s *Store) ListProblems(f ProblemFilter) ([]Problem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanProblems(rows)
+	return s.scanProblems(rows)
 }
 
 func (s *Store) GetProblem(id int64) (*Problem, error) {
@@ -169,7 +165,7 @@ func (s *Store) GetProblem(id int64) (*Problem, error) {
 	if err != nil {
 		return nil, err
 	}
-	ps, err := scanProblems(rows)
+	ps, err := s.scanProblems(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +178,9 @@ func (s *Store) GetProblem(id int64) (*Problem, error) {
 // CreateProblem records a new report. It starts open and unassigned.
 func (s *Store) CreateProblem(p *Problem) error {
 	p.Title, p.Status = strings.TrimSpace(p.Title), ProblemOpen
-	res, err := s.DB.Exec(`INSERT INTO problems (building_id, room_id, item_id, title, details, reported_by, reporter_name, reporter_contact)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.BuildingID, nullInt(p.RoomID), nullInt(p.ItemID), p.Title, p.Details, nullInt(p.ReportedBy),
+	res, err := s.DB.Exec(`INSERT INTO problems (place_id, item_id, title, details, reported_by, reporter_name, reporter_contact)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		p.PlaceID, nullInt(p.ItemID), p.Title, p.Details, nullInt(p.ReportedBy),
 		strings.TrimSpace(p.ReporterName), strings.TrimSpace(p.ReporterContact))
 	if err != nil {
 		return err
@@ -198,10 +194,10 @@ func (s *Store) CreateProblem(p *Problem) error {
 // different item clears the unit.
 func (s *Store) SaveProblemDetails(p *Problem) error {
 	p.Title = strings.TrimSpace(p.Title)
-	_, err := s.DB.Exec(`UPDATE problems SET building_id = ?, room_id = ?, title = ?, details = ?,
+	_, err := s.DB.Exec(`UPDATE problems SET place_id = ?, title = ?, details = ?,
 		reporter_name = ?, reporter_contact = ?, updated_at = datetime('now'),
 		unit = CASE WHEN item_id IS ? THEN unit END, item_id = ? WHERE id = ?`,
-		p.BuildingID, nullInt(p.RoomID), p.Title, p.Details,
+		p.PlaceID, p.Title, p.Details,
 		strings.TrimSpace(p.ReporterName), strings.TrimSpace(p.ReporterContact), nullInt(p.ItemID), nullInt(p.ItemID), p.ID)
 	return err
 }

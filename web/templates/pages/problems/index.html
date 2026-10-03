@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="page-head">
   <div><h1>Problems</h1><p class="muted">Reported problems and who's working on them.</p></div>
-  <a class="btn btn--primary" href="/report{{if .Filter.BuildingID}}?building={{.Filter.BuildingID}}{{end}}">Report a problem</a>
+  <a class="btn btn--primary" href="/report{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Report a problem</a>
 </div>
 <form method="get" action="/problems" class="toolbar" data-controller="autosubmit">
   <label class="sr-only" for="status">Status</label>
@@ -12,11 +12,7 @@
     <option value="resolved" {{if eq .StatusParam "resolved"}}selected{{end}}>Resolved</option>
     <option value="all" {{if eq .StatusParam "all"}}selected{{end}}>All</option>
   </select>
-  <label class="sr-only" for="building">Building</label>
-  <select id="building" name="building" data-action="autosubmit#submit">
-    <option value="">All buildings</option>
-    {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Filter.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
-  </select>
+  {{template "place-filter" (dict "Places" .Places "Selected" .Filter.PlaceID "Tags" .Tags "Tag" .Filter.Tag)}}
   <label class="check"><input type="checkbox" name="mine" value="1" {{if .Mine}}checked{{end}} data-action="autosubmit#submit"> Assigned to me</label>
   <noscript><button class="btn btn--sm">Filter</button></noscript>
 </form>
@@ -24,7 +20,7 @@
   {{template "problem-table" (dict "Problems" .Problems "ShowLocation" true)}}
 {{else}}
   <div class="empty">
-    {{if or .StatusParam .Filter.BuildingID .Mine}}<p>No problems match.</p>{{else}}<h2>Nothing reported</h2><p>Open problems will show up here.</p>{{end}}
+    {{if or .StatusParam .Filter.PlaceID .Filter.Tag .Mine}}<p>No problems match.</p>{{else}}<h2>Nothing reported</h2><p>Open problems will show up here.</p>{{end}}
   </div>
 {{end}}
 {{end}}

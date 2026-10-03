@@ -9,24 +9,10 @@
 </div>
 <div class="card narrow">
   {{template "errors" .Errors}}
-  <form method="post" action="/items/{{$i.ID}}/move" class="form" data-controller="room-select">
+  <form method="post" action="/items/{{$i.ID}}/move" class="form" data-controller="place-picker">
     {{template "csrf" .CSRF}}
     <input type="hidden" name="next" value="{{.Next}}">
-    <div class="field-row">
-      <div class="field">
-        <label for="building_id">Building</label>
-        <select id="building_id" name="building_id" required data-room-select-target="building" data-action="room-select#filter">
-          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Form.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
-        </select>
-      </div>
-      <div class="field">
-        <label for="room_id">Room</label>
-        <select id="room_id" name="room_id" data-room-select-target="room">
-          <option value="">— Building-wide / no room —</option>
-          {{range .Rooms}}<option value="{{.ID}}" data-building-id="{{.BuildingID}}" {{if eq .ID $.Form.RoomID}}selected{{end}}>{{.Label}}{{if .Floor}} ({{.Floor}}){{end}}</option>{{end}}
-        </select>
-      </div>
-    </div>
+    {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Moving to" "Required" true)}}
     <div class="field field--narrow">
       <label for="moved_on">Date moved</label>
       <input id="moved_on" name="moved_on" type="date" value="{{.Form.MovedOn}}" max="{{today}}" required>

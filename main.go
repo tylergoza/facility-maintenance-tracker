@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -135,11 +136,15 @@ func checkCommand(args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown command %q (commands: create-user, reset-password, backup, seed-demo)", args[0])
 	}
-	if args[0] != "seed-demo" && len(args) < 2 {
+	rest := args[1:]
+	if args[0] == "create-user" {
+		rest = slices.DeleteFunc(slices.Clone(rest), func(a string) bool { return a == "--admin" })
+	}
+	if args[0] != "seed-demo" && len(rest) < 1 {
 		return errors.New("usage: " + usage)
 	}
-	for _, a := range args[1:] {
-		if strings.HasPrefix(a, "-") && !(args[0] == "create-user" && a == "--admin") {
+	for _, a := range rest {
+		if strings.HasPrefix(a, "-") {
 			return fmt.Errorf("%s: flags like %s go before the command, e.g. maintenance-tracker -db /path/to/maintenance.db %s", args[0], a, usage)
 		}
 	}
@@ -149,7 +154,9 @@ func checkCommand(args []string) error {
 func runCommand(st *store.Store, args []string) error {
 	switch args[0] {
 	case "create-user":
-		admin := len(args) > 2 && args[2] == "--admin"
+		// --admin may come before or after the username.
+		admin := slices.Contains(args[1:], "--admin")
+		username := slices.DeleteFunc(slices.Clone(args[1:]), func(a string) bool { return a == "--admin" })[0]
 		if n, _ := st.CountUsers(); n == 0 {
 			admin = true // the first user is always an admin
 		}
@@ -157,10 +164,10 @@ func runCommand(st *store.Store, args []string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := st.CreateUser(args[1], "", pw, admin); err != nil {
+		if _, err := st.CreateUser(username, "", pw, admin); err != nil {
 			return err
 		}
-		fmt.Printf("Created user %q (admin: %v)\n", args[1], admin)
+		fmt.Printf("Created user %q (admin: %v)\n", username, admin)
 	case "reset-password":
 		var id int64
 		if err := st.DB.QueryRow(`SELECT id FROM users WHERE username = ?`, args[1]).Scan(&id); err != nil {
@@ -186,7 +193,7 @@ func runCommand(st *store.Store, args []string) error {
 		if err := seedDemo(st); err != nil {
 			return err
 		}
-		fmt.Println("Demo buildings, rooms, items and tasks added.")
+		fmt.Println("Demo places, items and tasks added.")
 	default:
 		return fmt.Errorf("unknown command %q (commands: create-user, reset-password, backup, seed-demo)", args[0])
 	}

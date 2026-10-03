@@ -1,24 +1,20 @@
 {{define "content"}}
 <div class="page-head">
-  <div><h1>Items</h1><p class="muted">Everything being tracked, across all buildings.</p></div>
-  <a class="btn btn--primary" href="/items/new{{if .Filter.BuildingID}}?building={{.Filter.BuildingID}}{{end}}">Add item</a>
+  <div><h1>Items</h1><p class="muted">Everything being tracked, everywhere.</p></div>
+  <a class="btn btn--primary" href="/items/new{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Add item</a>
 </div>
 <form method="get" action="/items" class="toolbar" data-controller="autosubmit">
   <label class="sr-only" for="q">Search</label>
   <input id="q" type="search" name="q" value="{{.Filter.Query}}" placeholder="Search name, category, model, serial…"
          data-action="input->autosubmit#debounced">
-  <label class="sr-only" for="building">Building</label>
-  <select id="building" name="building" data-action="autosubmit#submit">
-    <option value="">All buildings</option>
-    {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Filter.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
-  </select>
+  {{template "place-filter" (dict "Places" .Places "Selected" .Filter.PlaceID "Tags" .Tags "Tag" .Filter.Tag)}}
   <noscript><button class="btn btn--sm">Filter</button></noscript>
 </form>
 {{if .Items}}
   {{template "item-table" (dict "Items" .Items "ShowLocation" true "ShowCategory" true "Next" .URI)}}
 {{else}}
   <div class="empty">
-    {{if or .Filter.Query .Filter.BuildingID}}<p>No items match.</p>{{else}}<h2>No items yet</h2><p>Add things you maintain or count: furnaces, fire extinguishers, projectors, 10 outlets, 15 lights…</p>{{end}}
+    {{if or .Filter.Query .Filter.PlaceID .Filter.Tag}}<p>No items match.</p>{{else}}<h2>No items yet</h2><p>Add things you maintain or count: furnaces, fire extinguishers, projectors, 10 outlets, 15 lights…</p>{{end}}
   </div>
 {{end}}
 {{end}}

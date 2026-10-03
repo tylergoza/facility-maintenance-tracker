@@ -1,0 +1,29 @@
+{{define "content"}}
+<div class="page-head"><div><h1>{{.Title}}</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  {{if not .Parents}}
+    <p>You need to <a href="/places/new">add a building</a> first.</p>
+  {{else}}
+  <form method="post" action="/places/bulk" class="form" data-controller="place-picker" data-action="change->place-picker#kindChanged">
+    {{template "csrf" .CSRF}}
+    {{template "place-select" (dict "Name" "parent_id" "Places" .Parents "Selected" .Form.ParentID "Label" "Inside" "Required" true "Blank" "Choose…")}}
+    <fieldset class="fieldset">
+      <legend>They're all</legend>
+      <div class="segmented" role="radiogroup" aria-label="Kind of place">
+        {{range .Kinds}}<label><input type="radio" name="kind" value="{{.}}" data-level="{{kindLevel .}}" {{if eq . $.Form.Kind}}checked{{end}}> {{kindLabel .}}s</label>{{end}}
+      </div>
+    </fieldset>
+    <div class="field">
+      <label for="lines">Names</label>
+      <textarea id="lines" name="lines" rows="10" required autofocus placeholder="101, Nursery&#10;102, Classroom A&#10;Kitchen">{{.Form.Lines}}</textarea>
+      <p class="hint">One per line. Put the number first followed by a comma, or leave it off. You can also paste two columns (number, name) from a spreadsheet.</p>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Add them</button>
+      <a class="btn btn--ghost" href="{{if .Form.ParentID}}/places/{{.Form.ParentID}}{{else}}/places{{end}}">Cancel</a>
+    </div>
+  </form>
+  {{end}}
+</div>
+{{end}}

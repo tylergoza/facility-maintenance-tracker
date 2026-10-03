@@ -124,11 +124,8 @@ type Task struct {
 	ItemID          int64
 	ItemName        string
 	ItemCategory    string
-	BuildingID      int64
-	BuildingName    string
-	RoomID          int64
-	RoomNumber      string
-	RoomName        string
+	PlaceID         int64 // where the item is
+	Place           Place
 	Name            string
 	Description     string
 	IntervalValue   int
@@ -162,49 +159,54 @@ func (t Task) IntervalLabel() string {
 	return fmt.Sprintf("Every %d %ss", t.IntervalValue, unit)
 }
 
-func (t Task) Location() string {
-	if t.RoomName != "" {
-		return t.BuildingName + " › " + RoomLabel(t.RoomNumber, t.RoomName)
-	}
-	return t.BuildingName
-}
+// Location renders where the item is.
+func (t Task) Location() string { return t.Place.Path }
 
 type TaskFilter struct {
 	ItemID     int64
-	BuildingID int64
+	PlaceID    int64 // items in this place or anywhere inside it
 	SupplyID   int64
 	ActiveOnly bool
 }
 
 const taskSelect = `
-	SELECT t.id, t.item_id, i.name, i.category, i.building_id, b.name, COALESCE(i.room_id, 0), COALESCE(r.number, ''), COALESCE(r.name, ''),
+	SELECT t.id, t.item_id, i.name, i.category, i.place_id,
 	       t.name, t.description, COALESCE(t.interval_value, 0), COALESCE(t.interval_unit, ''),
 	       COALESCE(t.last_completed_on, ''), COALESCE(t.next_due_on, ''), t.active,
 	       COALESCE(t.supply_id, 0), t.supply_amount, t.supply_always, COALESCE(s.name, ''), COALESCE(s.unit, ''),
-	       COALESCE(s.quantity, 0), COALESCE(s.reorder_at, 0), COALESCE(sb.name, ''), COALESCE(sr.number, ''), COALESCE(sr.name, '')
+	       COALESCE(s.quantity, 0), COALESCE(s.reorder_at, 0), COALESCE(s.place_id, 0)
 	FROM tasks t
 	JOIN items i ON i.id = t.item_id
-	JOIN buildings b ON b.id = i.building_id
-	LEFT JOIN rooms r ON r.id = i.room_id
-	LEFT JOIN supplies s ON s.id = t.supply_id
-	LEFT JOIN buildings sb ON sb.id = s.building_id
-	LEFT JOIN rooms sr ON sr.id = s.room_id`
+	LEFT JOIN supplies s ON s.id = t.supply_id`
 
-func scanTasks(rows *sql.Rows) ([]Task, error) {
+// scanTasks reads tasks and fills in where their items and supplies are.
+func (s *Store) scanTasks(rows *sql.Rows) ([]Task, error) {
 	defer rows.Close()
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.ItemID, &t.ItemName, &t.ItemCategory, &t.BuildingID, &t.BuildingName, &t.RoomID, &t.RoomNumber, &t.RoomName,
+		if err := rows.Scan(&t.ID, &t.ItemID, &t.ItemName, &t.ItemCategory, &t.PlaceID,
 			&t.Name, &t.Description, &t.IntervalValue, &t.IntervalUnit, &t.LastCompletedOn, &t.NextDueOn, &t.Active,
 			&t.SupplyID, &t.SupplyAmount, &t.SupplyAlways, &t.Supply.Name, &t.Supply.Unit, &t.Supply.Quantity, &t.Supply.ReorderAt,
-			&t.Supply.BuildingName, &t.Supply.RoomNumber, &t.Supply.RoomName); err != nil {
+			&t.Supply.PlaceID); err != nil {
 			return nil, err
 		}
 		t.Supply.ID = t.SupplyID
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	tree, err := loadPlaces(s.DB)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Place, _ = tree.Get(out[i].PlaceID)
+		out[i].Supply.Place, _ = tree.Get(out[i].Supply.PlaceID)
+	}
+	return out, nil
 }
 
 // ListTasks returns tasks ordered by due date, unscheduled last.
@@ -215,10 +217,7 @@ func (s *Store) ListTasks(f TaskFilter) ([]Task, error) {
 		q += ` AND t.item_id = ?`
 		args = append(args, f.ItemID)
 	}
-	if f.BuildingID != 0 {
-		q += ` AND i.building_id = ?`
-		args = append(args, f.BuildingID)
-	}
+	q, args = placeFilter(q, args, "i.place_id", f.PlaceID, false, "")
 	if f.SupplyID != 0 {
 		q += ` AND t.supply_id = ?`
 		args = append(args, f.SupplyID)
@@ -231,7 +230,7 @@ func (s *Store) ListTasks(f TaskFilter) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanTasks(rows)
+	return s.scanTasks(rows)
 }
 
 func (s *Store) GetTask(id int64) (*Task, error) {
@@ -239,7 +238,7 @@ func (s *Store) GetTask(id int64) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts, err := scanTasks(rows)
+	ts, err := s.scanTasks(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -282,35 +281,29 @@ func (s *Store) DeleteTask(id int64) error {
 // Logs -------------------------------------------------------------------
 
 type Log struct {
-	ID           int64
-	ItemID       int64
-	ItemName     string
-	TaskID       int64
-	TaskName     string
-	Kind         string // "work", "replaced" or "moved"
-	Replaced     int    // how many of the item's supply were replaced; 0 if none
-	SupplyName   string // the item's supply, for "Replaced 2 × …"
-	Units        []int  // which of a group item's units it was about
-	BuildingName string
-	RoomNumber   string
-	RoomName     string
-	PerformedOn  string
-	PerformedBy  string
-	CostCents    int64
-	Notes        string
-	CreatedBy    string
-	SupplyUsed   string // e.g. "1 × Furnace filters"; blank if none
+	ID          int64
+	ItemID      int64
+	ItemName    string
+	TaskID      int64
+	TaskName    string
+	Kind        string // "work", "replaced" or "moved"
+	Replaced    int    // how many of the item's supply were replaced; 0 if none
+	SupplyName  string // the item's supply, for "Replaced 2 × …"
+	Units       []int  // which of a group item's units it was about
+	Place       Place  // where the item is now
+	PerformedOn string
+	PerformedBy string
+	CostCents   int64
+	Notes       string
+	CreatedBy   string
+	SupplyUsed  string // e.g. "1 × Furnace filters"; blank if none
 }
 
 // UnitsLabel renders "#3, #7", or "" when no units were picked.
 func (l Log) UnitsLabel() string { return UnitsLabel(l.Units) }
 
-func (l Log) Location() string {
-	if l.RoomName != "" {
-		return l.BuildingName + " › " + RoomLabel(l.RoomNumber, l.RoomName)
-	}
-	return l.BuildingName
-}
+// Location renders where the item is now.
+func (l Log) Location() string { return l.Place.Path }
 
 func (l Log) Cost() string {
 	if l.CostCents == 0 {
@@ -327,7 +320,7 @@ type LogFilter struct {
 func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 	q := `
 		SELECT l.id, l.item_id, i.name, COALESCE(l.task_id, 0), COALESCE(t.name, ''), l.kind, COALESCE(l.replaced, 0), COALESCE(s.name, ''),
-		       b.name, COALESCE(r.number, ''), COALESCE(r.name, ''),
+		       i.place_id,
 		       l.performed_on, l.performed_by, COALESCE(l.cost_cents, 0), l.notes,
 		       COALESCE(NULLIF(u.display_name, ''), u.username, ''),
 		       COALESCE((SELECT c.amount || ' × ' || s.name FROM supply_changes c JOIN supplies s ON s.id = c.supply_id
@@ -335,8 +328,6 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 		       COALESCE((SELECT group_concat(unit) FROM log_units WHERE log_id = l.id), '')
 		FROM maintenance_logs l
 		JOIN items i ON i.id = l.item_id
-		JOIN buildings b ON b.id = i.building_id
-		LEFT JOIN rooms r ON r.id = i.room_id
 		LEFT JOIN tasks t ON t.id = l.task_id
 		LEFT JOIN users u ON u.id = l.created_by
 		LEFT JOIN supplies s ON s.id = i.supply_id
@@ -360,14 +351,25 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 		var l Log
 		var units string
 		if err := rows.Scan(&l.ID, &l.ItemID, &l.ItemName, &l.TaskID, &l.TaskName, &l.Kind, &l.Replaced, &l.SupplyName,
-			&l.BuildingName, &l.RoomNumber, &l.RoomName,
+			&l.Place.ID,
 			&l.PerformedOn, &l.PerformedBy, &l.CostCents, &l.Notes, &l.CreatedBy, &l.SupplyUsed, &units); err != nil {
 			return nil, err
 		}
 		l.Units = parseUnits(units)
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	tree, err := loadPlaces(s.DB)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Place, _ = tree.Get(out[i].Place.ID)
+	}
+	return out, nil
 }
 
 // DeleteLog removes a history entry. Any supply taken as part of it is put
@@ -452,12 +454,12 @@ func (s *Store) RecordMaintenance(c Completion) error {
 		}
 	}
 	if c.SupplyID != 0 && c.SupplyAmount > 0 {
-		var itemName, taskName, number, room string // only for the history note; blank is fine
-		_ = tx.QueryRow(`SELECT i.name, COALESCE(t.name, ''), COALESCE(r.number, ''), COALESCE(r.name, '')
-			FROM items i LEFT JOIN tasks t ON t.id = ? LEFT JOIN rooms r ON r.id = i.room_id WHERE i.id = ?`, c.TaskID, c.ItemID).
-			Scan(&itemName, &taskName, &number, &room)
-		if room != "" {
-			itemName += ", " + RoomLabel(number, room)
+		var itemName, taskName, number, place string // only for the history note; blank is fine
+		_ = tx.QueryRow(`SELECT i.name, COALESCE(t.name, ''), p.number, p.name
+			FROM items i JOIN places p ON p.id = i.place_id LEFT JOIN tasks t ON t.id = ? WHERE i.id = ?`, c.TaskID, c.ItemID).
+			Scan(&itemName, &taskName, &number, &place)
+		if place != "" {
+			itemName += ", " + RoomLabel(number, place)
 		}
 		if len(c.Units) > 0 {
 			itemName += ", " + UnitsLabel(c.Units)
@@ -506,17 +508,15 @@ func (s *Store) RecordMaintenance(c Completion) error {
 // Summary ----------------------------------------------------------------
 
 type Counts struct {
-	Buildings int
-	Rooms     int
-	Items     int
-	Tasks     int
+	Places int
+	Items  int
+	Tasks  int
 }
 
 func (s *Store) Counts() (Counts, error) {
 	var c Counts
 	err := s.DB.QueryRow(`SELECT
-		(SELECT COUNT(*) FROM buildings), (SELECT COUNT(*) FROM rooms),
-		(SELECT COUNT(*) FROM items), (SELECT COUNT(*) FROM tasks WHERE active = 1)`).
-		Scan(&c.Buildings, &c.Rooms, &c.Items, &c.Tasks)
+		(SELECT COUNT(*) FROM places), (SELECT COUNT(*) FROM items), (SELECT COUNT(*) FROM tasks WHERE active = 1)`).
+		Scan(&c.Places, &c.Items, &c.Tasks)
 	return c, err
 }

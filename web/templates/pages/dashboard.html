@@ -2,15 +2,15 @@
 <div data-controller="task-filter">
   <div class="page-head">
     <div>
-      <h1>{{if .Selected}}{{.Selected.Name}}{{else}}Maintenance dashboard{{end}}</h1>
+      <h1>{{if .PlaceID}}{{.Selected.Path}}{{else}}Maintenance dashboard{{end}}</h1>
       <p class="muted">"Due soon" means within {{.DueSoonDays}} days · Updated {{.Updated}}</p>
     </div>
-    {{if .Buildings}}
+    {{if .Places}}
       <form method="get" action="/" class="page-head__filter" data-controller="autosubmit">
-        <label class="sr-only" for="building-filter">Building</label>
-        <select id="building-filter" name="building" data-action="autosubmit#submit">
-          <option value="">All buildings</option>
-          {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
+        <label class="sr-only" for="place-filter">Place</label>
+        <select id="place-filter" name="place" data-action="autosubmit#submit">
+          <option value="">Everywhere</option>
+          {{range .Places}}<option value="{{.ID}}" {{if eq .ID $.PlaceID}}selected{{end}}>{{indent .Depth}}{{.Label}}</option>{{end}}
         </select>
         <noscript><button class="btn btn--sm">Go</button></noscript>
       </form>
@@ -23,10 +23,10 @@
     <div class="empty">
       <h2>Nothing scheduled yet</h2>
       {{if .User}}
-        <p>Add a building, rooms and items, then give each item a maintenance task.</p>
-        <p><a class="btn btn--primary" href="/buildings">Go to buildings</a></p>
+        <p>Add a building, its rooms and items, then give each item a maintenance task.</p>
+        <p><a class="btn btn--primary" href="/places">Go to places</a></p>
       {{else}}
-        <p>No maintenance tasks have been set up{{if .Selected}} for this building{{end}}.</p>
+        <p>No maintenance tasks have been set up{{if .PlaceID}} here{{end}}.</p>
       {{end}}
     </div>
   {{else}}
@@ -37,7 +37,7 @@
         <h2 id="by-building" class="section__title">By building</h2>
         <div class="health-grid">
           {{range .Health}}
-            <a class="health-card health-card--{{.Worst}}" href="/?building={{.ID}}">
+            <a class="health-card health-card--{{.Worst}}" href="/?place={{.ID}}">
               <strong>{{.Name}}</strong>
               <span class="health-card__counts">
                 {{if .Overdue}}<span class="badge badge--overdue">{{.Overdue}} overdue</span>{{end}}
@@ -83,7 +83,7 @@
     <section class="section" aria-labelledby="open-problems">
       <div class="section__head">
         <h2 id="open-problems" class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>
-        <a class="btn btn--ghost btn--sm" href="/problems{{if .BuildingID}}?building={{.BuildingID}}{{end}}">All problems</a>
+        <a class="btn btn--ghost btn--sm" href="/problems{{if .PlaceID}}?place={{.PlaceID}}{{end}}">All problems</a>
       </div>
       {{template "problem-table" (dict "Problems" .Problems "ShowLocation" true)}}
     </section>
@@ -95,7 +95,7 @@
     <section class="section" aria-labelledby="low-supplies">
       <div class="section__head">
         <h2 id="low-supplies" class="section__title">Supplies to restock <span class="count">{{len .LowSupplies}}</span></h2>
-        {{if .User}}<a class="btn btn--ghost btn--sm" href="/supplies?low=1{{if .BuildingID}}&amp;building={{.BuildingID}}{{end}}">All supplies</a>{{end}}
+        {{if .User}}<a class="btn btn--ghost btn--sm" href="/supplies?low=1{{if .PlaceID}}&amp;place={{.PlaceID}}{{end}}">All supplies</a>{{end}}
       </div>
       {{if .User}}
         {{template "supply-table" (dict "Supplies" .LowSupplies "ShowLocation" true "CSRF" .CSRF "Next" .URI)}}

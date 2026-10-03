@@ -12,35 +12,31 @@ import (
 // Supplies ---------------------------------------------------------------
 
 func (s *Server) handleSupplies(w http.ResponseWriter, r *http.Request) {
-	f := store.SupplyFilter{BuildingID: queryInt(r, "building"), Query: r.URL.Query().Get("q"), LowOnly: r.URL.Query().Get("low") == "1"}
+	q := r.URL.Query()
+	f := store.SupplyFilter{PlaceID: queryInt(r, "place"), Tag: q.Get("tag"), Query: q.Get("q"), LowOnly: q.Get("low") == "1"}
 	supplies, err := s.store.ListSupplies(f)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	buildings, err := s.store.ListBuildings()
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	s.render(w, r, http.StatusOK, "supplies/index", map[string]any{
-		"Title": "Supplies", "Supplies": supplies, "Buildings": buildings, "Filter": f,
+		"Title": "Supplies", "Supplies": supplies, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f,
 	})
 }
 
 func (s *Server) supplyForm(w http.ResponseWriter, r *http.Request, status int, title string, sp store.Supply, errs []string) {
-	buildings, err := s.store.ListBuildings()
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	rooms, err := s.store.ListRooms(0)
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	s.render(w, r, status, "supplies/form", map[string]any{
-		"Title": title, "Form": sp, "Buildings": buildings, "Rooms": rooms, "Errors": errs,
+		"Title": title, "Form": sp, "Places": tree.All(), "Errors": errs,
 	})
 }
 
@@ -55,12 +51,12 @@ func formCount(r *http.Request, key string) (int, bool) {
 }
 
 func (s *Server) supplyFromForm(r *http.Request, sp *store.Supply) []string {
-	sp.BuildingID, sp.RoomID = formInt(r, "building_id"), formInt(r, "room_id")
+	sp.PlaceID = formInt(r, "place_id")
 	sp.Name, sp.Unit, sp.Notes = formStr(r, "name"), formStr(r, "unit"), formStr(r, "notes")
 	sp.Reusable = r.PostFormValue("reusable") == "1"
 	var errs []string
-	if sp.BuildingID == 0 {
-		errs = append(errs, "Choose a building.")
+	if _, err := s.store.GetPlace(sp.PlaceID); err != nil {
+		errs = append(errs, "Choose where it's kept.")
 	}
 	if sp.Name == "" {
 		errs = append(errs, "Name is required.")
@@ -82,22 +78,11 @@ func (s *Server) supplyFromForm(r *http.Request, sp *store.Supply) []string {
 			}
 		}
 	}
-	if sp.RoomID != 0 {
-		room, err := s.store.GetRoom(sp.RoomID)
-		if err != nil || room.BuildingID != sp.BuildingID {
-			errs = append(errs, "The selected room is not in the selected building.")
-		}
-	}
 	return errs
 }
 
 func (s *Server) handleSupplyNew(w http.ResponseWriter, r *http.Request) {
-	sp := store.Supply{BuildingID: queryInt(r, "building"), RoomID: queryInt(r, "room")}
-	if sp.RoomID != 0 {
-		if room, err := s.store.GetRoom(sp.RoomID); err == nil {
-			sp.BuildingID = room.BuildingID
-		}
-	}
+	sp := store.Supply{PlaceID: queryInt(r, "place")}
 	s.supplyForm(w, r, http.StatusOK, "Add supply", sp, nil)
 }
 
@@ -181,11 +166,7 @@ func (s *Server) handleSupplyDelete(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	to := "/supplies"
-	if sp.RoomID != 0 {
-		to = fmt.Sprintf("/rooms/%d", sp.RoomID)
-	}
-	s.redirect(w, r, to, sp.Name+" deleted.")
+	s.redirect(w, r, fmt.Sprintf("/places/%d", sp.PlaceID), sp.Name+" deleted.")
 }
 
 // handleSupplyAdjust records a change to a supply's counts: used,

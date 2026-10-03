@@ -30,7 +30,10 @@ type Store struct {
 
 // Open opens (creating if needed) the SQLite database at path and applies
 // any pending migrations.
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return openAt(path, 0) }
+
+// openAt opens the database migrated up to version upTo (0 for all).
+func openAt(path string, upTo int) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("create data dir: %w", err)
@@ -49,7 +52,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{DB: db}
-	if err := s.migrate(); err != nil {
+	if err := s.migrate(upTo); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -58,7 +61,13 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.DB.Close() }
 
-func (s *Store) migrate() error {
+// noForeignKeys marks a migration that rebuilds tables other tables point
+// at. SQLite needs foreign keys off for that (and can only switch them off
+// outside a transaction); they're checked before the migration commits.
+const noForeignKeys = "-- foreign_keys: off"
+
+// migrate applies pending migrations up to version upTo (0 for all).
+func (s *Store) migrate(upTo int) error {
 	if _, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`); err != nil {
 		return err
 	}
@@ -72,6 +81,9 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return fmt.Errorf("bad migration name %q", e.Name())
 		}
+		if upTo > 0 && version > upTo {
+			break
+		}
 		var exists int
 		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
 			return err
@@ -83,23 +95,50 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return err
 		}
-		tx, err := s.DB.Begin()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(string(body)); err != nil {
-			tx.Rollback()
+		if err := s.runMigration(version, string(body)); err != nil {
 			return fmt.Errorf("%s: %w", e.Name(), err)
-		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
 		}
 	}
 	return nil
+}
+
+func (s *Store) runMigration(version int, body string) error {
+	ctx := context.Background()
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	fkOff := strings.HasPrefix(body, noForeignKeys)
+	if fkOff {
+		if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return err
+		}
+		defer conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(body); err != nil {
+		return err
+	}
+	if fkOff {
+		var table string
+		var parent sql.NullString
+		var rowid, fkid sql.NullInt64
+		err := tx.QueryRow(`PRAGMA foreign_key_check`).Scan(&table, &rowid, &parent, &fkid)
+		if err == nil {
+			return fmt.Errorf("broken reference in %s row %d", table, rowid.Int64)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Backup writes a consistent snapshot of the live database to dest using

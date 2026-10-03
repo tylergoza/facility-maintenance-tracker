@@ -56,19 +56,19 @@ func groupItems(items []store.Item) []itemGroup {
 }
 
 func (s *Server) handleItems(w http.ResponseWriter, r *http.Request) {
-	f := store.ItemFilter{BuildingID: queryInt(r, "building"), Query: r.URL.Query().Get("q")}
+	f := store.ItemFilter{PlaceID: queryInt(r, "place"), Tag: r.URL.Query().Get("tag"), Query: r.URL.Query().Get("q")}
 	items, err := s.store.ListItems(f)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	buildings, err := s.store.ListBuildings()
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	s.render(w, r, http.StatusOK, "items/index", map[string]any{
-		"Title": "Items", "Items": items, "Buildings": buildings, "Filter": f,
+		"Title": "Items", "Items": items, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f,
 	})
 }
 
@@ -83,12 +83,7 @@ type itemForm struct {
 }
 
 func (s *Server) renderItemForm(w http.ResponseWriter, r *http.Request, status int, title string, f itemForm, errs []string) {
-	buildings, err := s.store.ListBuildings()
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	rooms, err := s.store.ListRooms(0)
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -113,21 +108,21 @@ func (s *Server) renderItemForm(w http.ResponseWriter, r *http.Request, status i
 		}
 	}
 	s.render(w, r, status, "items/form", map[string]any{
-		"Title": title, "Form": f, "Buildings": buildings, "Rooms": rooms, "Supplies": supplies,
+		"Title": title, "Form": f, "Places": tree.All(), "Supplies": supplies,
 		"Categories": cats, "Names": commonItems, "Errors": errs,
 	})
 }
 
 func (s *Server) itemFromForm(r *http.Request, f *itemForm) []string {
-	f.BuildingID, f.RoomID = formInt(r, "building_id"), formInt(r, "room_id")
+	f.PlaceID = formInt(r, "place_id")
 	f.Name, f.Category = formStr(r, "name"), formStr(r, "category")
 	f.Manufacturer, f.Model, f.SerialNumber = formStr(r, "manufacturer"), formStr(r, "model"), formStr(r, "serial_number")
 	f.InstallDate, f.Notes = formStr(r, "install_date"), formStr(r, "notes")
 	f.Portable = r.PostFormValue("portable") == "1"
 	f.SupplySource = formStr(r, "supply_source")
 	var errs []string
-	if f.BuildingID == 0 {
-		errs = append(errs, "Choose a building.")
+	if _, err := s.store.GetPlace(f.PlaceID); err != nil {
+		errs = append(errs, "Choose where it is.")
 	}
 	if f.Name == "" {
 		errs = append(errs, "Name is required.")
@@ -172,13 +167,6 @@ func (s *Server) itemFromForm(r *http.Request, f *itemForm) []string {
 	default:
 		errs = append(errs, "Choose whether it uses a supply.")
 	}
-
-	if f.RoomID != 0 {
-		room, err := s.store.GetRoom(f.RoomID)
-		if err != nil || room.BuildingID != f.BuildingID {
-			errs = append(errs, "The selected room is not in the selected building.")
-		}
-	}
 	return errs
 }
 
@@ -192,12 +180,7 @@ func (s *Server) saveItem(r *http.Request, f *itemForm) error {
 }
 
 func (s *Server) handleItemNew(w http.ResponseWriter, r *http.Request) {
-	f := itemForm{Item: store.Item{BuildingID: queryInt(r, "building"), RoomID: queryInt(r, "room"), Quantity: 1, SupplyPer: 1}}
-	if f.RoomID != 0 {
-		if room, err := s.store.GetRoom(f.RoomID); err == nil {
-			f.BuildingID = room.BuildingID
-		}
-	}
+	f := itemForm{Item: store.Item{PlaceID: queryInt(r, "place"), Quantity: 1, SupplyPer: 1}}
 	s.renderItemForm(w, r, http.StatusOK, "Add item", f, nil)
 }
 
@@ -254,8 +237,14 @@ func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	tree, err := s.store.Places()
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	crumbs := append(tree.Ancestors(item.PlaceID), item.Place)
 	s.render(w, r, http.StatusOK, "items/show", map[string]any{
-		"Title": item.Name, "Item": item, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies, "Problems": problems,
+		"Title": item.Name, "Item": item, "Crumbs": crumbs, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies, "Problems": problems,
 		"Units": units, "FrequentReplacements": store.FrequentReplacements,
 	})
 }
@@ -281,7 +270,7 @@ func (s *Server) handleItemUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A new location is recorded in the item's history as a move.
-	if err := s.store.MoveItem(store.Move{ItemID: item.ID, BuildingID: f.BuildingID, RoomID: f.RoomID, MovedOn: s.today(), UserID: currentUser(r).ID}); err != nil {
+	if err := s.store.MoveItem(store.Move{ItemID: item.ID, PlaceID: f.PlaceID, MovedOn: s.today(), UserID: currentUser(r).ID}); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
@@ -302,11 +291,7 @@ func (s *Server) handleItemDelete(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	to := fmt.Sprintf("/buildings/%d", item.BuildingID)
-	if item.RoomID != 0 {
-		to = fmt.Sprintf("/rooms/%d", item.RoomID)
-	}
-	s.redirect(w, r, to, item.Name+" deleted.")
+	s.redirect(w, r, fmt.Sprintf("/places/%d", item.PlaceID), item.Name+" deleted.")
 }
 
 // Replacing an item's supply -------------------------------------------------
@@ -407,18 +392,13 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 // Moving -------------------------------------------------------------------
 
 func (s *Server) renderMoveForm(w http.ResponseWriter, r *http.Request, status int, item *store.Item, m store.Move, next string, errs []string) {
-	buildings, err := s.store.ListBuildings()
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	rooms, err := s.store.ListRooms(0)
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	s.render(w, r, status, "items/move", map[string]any{
-		"Title": "Move " + item.Name, "Item": item, "Form": m, "Buildings": buildings, "Rooms": rooms, "Next": next, "Errors": errs,
+		"Title": "Move " + item.Name, "Item": item, "Form": m, "Places": tree.All(), "Next": next, "Errors": errs,
 	})
 }
 
@@ -428,7 +408,7 @@ func (s *Server) handleMoveForm(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.renderMoveForm(w, r, http.StatusOK, item, store.Move{BuildingID: item.BuildingID, RoomID: item.RoomID, MovedOn: s.today()}, r.URL.Query().Get("next"), nil)
+	s.renderMoveForm(w, r, http.StatusOK, item, store.Move{PlaceID: item.PlaceID, MovedOn: s.today()}, r.URL.Query().Get("next"), nil)
 }
 
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
@@ -438,24 +418,17 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := r.PostFormValue("next")
-	m := store.Move{ItemID: item.ID, BuildingID: formInt(r, "building_id"), RoomID: formInt(r, "room_id"),
-		MovedOn: formStr(r, "moved_on"), Note: formStr(r, "note"), UserID: currentUser(r).ID}
+	m := store.Move{ItemID: item.ID, PlaceID: formInt(r, "place_id"), MovedOn: formStr(r, "moved_on"), Note: formStr(r, "note"), UserID: currentUser(r).ID}
 	var errs []string
-	if _, err := s.store.GetBuilding(m.BuildingID); err != nil {
-		errs = append(errs, "Choose a building.")
-	}
-	if m.RoomID != 0 {
-		room, err := s.store.GetRoom(m.RoomID)
-		if err != nil || room.BuildingID != m.BuildingID {
-			errs = append(errs, "The selected room is not in the selected building.")
-		}
+	if _, err := s.store.GetPlace(m.PlaceID); err != nil {
+		errs = append(errs, "Choose where it's moving to.")
 	}
 	if !validDate(m.MovedOn) {
 		errs = append(errs, "Enter the date it was moved.")
 	} else if m.MovedOn > s.today() {
 		errs = append(errs, "The date can't be in the future.")
 	}
-	if m.BuildingID == item.BuildingID && m.RoomID == item.RoomID {
+	if m.PlaceID == item.PlaceID {
 		errs = append(errs, "Choose where it's moving to; that's where it is now.")
 	}
 	if errs != nil {

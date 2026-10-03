@@ -23,17 +23,14 @@ func (e *NotEnoughError) Error() string { return fmt.Sprintf("only %d %s", e.Hav
 func (e *NotEnoughError) Unwrap() error { return ErrNotEnough }
 
 type Supply struct {
-	ID           int64
-	BuildingID   int64
-	BuildingName string
-	RoomID       int64 // 0 when the supply is not in a specific room
-	RoomNumber   string
-	RoomName     string
-	Name         string
-	Unit         string // e.g. "rolls", "boxes"; may be blank
-	Quantity     int    // consumables: on hand; reusables: clean and on hand
-	ReorderAt    int    // low when Quantity <= ReorderAt; 0 = only when out
-	Notes        string
+	ID        int64
+	PlaceID   int64
+	Place     Place // where it's kept, with its path
+	Name      string
+	Unit      string // e.g. "rolls", "boxes"; may be blank
+	Quantity  int    // consumables: on hand; reusables: clean and on hand
+	ReorderAt int    // low when Quantity <= ReorderAt; 0 = only when out
+	Notes     string
 	// Reusable supplies (mop heads, rags) are washed instead of used up.
 	Reusable bool
 	InUse    int // reusables only: currently in use, e.g. on a mop
@@ -43,12 +40,8 @@ type Supply struct {
 // Total is every unit owned, wherever it is.
 func (s Supply) Total() int { return s.Quantity + s.InUse + s.Cleaning }
 
-func (s Supply) Location() string {
-	if s.RoomName != "" {
-		return s.BuildingName + " › " + RoomLabel(s.RoomNumber, s.RoomName)
-	}
-	return s.BuildingName
-}
+// Location renders where it's kept: "Main Building › Kitchen".
+func (s Supply) Location() string { return s.Place.Path }
 
 // Stock is "out", "low" or "ok".
 func (s Supply) Stock() string {
@@ -89,70 +82,64 @@ func (s Supply) QuantityLabel() string {
 }
 
 type SupplyFilter struct {
-	BuildingID int64
-	RoomID     int64
-	LowOnly    bool // only supplies that are out or at/below their reorder level
-	Query      string
+	PlaceID int64 // in this place or anywhere inside it
+	Direct  bool  // only supplies in PlaceID itself
+	Tag     string
+	LowOnly bool // only supplies that are out or at/below their reorder level
+	Query   string
 }
 
 const supplySelect = `
-	SELECT s.id, s.building_id, b.name, COALESCE(s.room_id, 0), COALESCE(r.number, ''), COALESCE(r.name, ''),
-	       s.name, s.unit, s.quantity, s.reorder_at, s.notes, s.reusable, s.in_use, s.cleaning
-	FROM supplies s
-	JOIN buildings b ON b.id = s.building_id
-	LEFT JOIN rooms r ON r.id = s.room_id`
+	SELECT s.id, s.place_id, s.name, s.unit, s.quantity, s.reorder_at, s.notes, s.reusable, s.in_use, s.cleaning
+	FROM supplies s`
 
-func scanSupplies(rows *sql.Rows) ([]Supply, error) {
+// scanSupplies reads supplies and fills in where they're kept, in tree
+// order then by name.
+func (st *Store) scanSupplies(rows *sql.Rows) ([]Supply, error) {
 	defer rows.Close()
 	var out []Supply
 	for rows.Next() {
 		var s Supply
-		if err := rows.Scan(&s.ID, &s.BuildingID, &s.BuildingName, &s.RoomID, &s.RoomNumber, &s.RoomName,
-			&s.Name, &s.Unit, &s.Quantity, &s.ReorderAt, &s.Notes, &s.Reusable, &s.InUse, &s.Cleaning); err != nil {
+		if err := rows.Scan(&s.ID, &s.PlaceID, &s.Name, &s.Unit, &s.Quantity, &s.ReorderAt, &s.Notes, &s.Reusable, &s.InUse, &s.Cleaning); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	t, err := loadPlaces(st.DB)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Place, _ = t.Get(out[i].PlaceID)
+	}
+	slices.SortStableFunc(out, func(a, b Supply) int {
+		return cmp.Or(cmp.Compare(a.Place.Order, b.Place.Order), strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)))
+	})
+	return out, nil
 }
 
-// ListSupplies returns supplies ordered by building, then room number
-// (building-wide and unnumbered last), then name.
+// ListSupplies returns supplies in tree order, then by name.
 func (s *Store) ListSupplies(f SupplyFilter) ([]Supply, error) {
 	q := supplySelect + ` WHERE 1=1`
 	var args []any
-	if f.BuildingID != 0 {
-		q += ` AND s.building_id = ?`
-		args = append(args, f.BuildingID)
-	}
-	if f.RoomID != 0 {
-		q += ` AND s.room_id = ?`
-		args = append(args, f.RoomID)
-	}
+	q, args = placeFilter(q, args, "s.place_id", f.PlaceID, f.Direct, f.Tag)
 	if f.LowOnly {
 		q += ` AND (s.quantity = 0 OR s.quantity <= s.reorder_at)`
 	}
 	if f.Query != "" {
 		like := "%" + f.Query + "%"
-		q += ` AND (s.name LIKE ? OR s.notes LIKE ? OR r.name LIKE ? OR r.number LIKE ?)`
+		q += ` AND (s.name LIKE ? OR s.notes LIKE ? OR s.place_id IN (SELECT id FROM places WHERE name LIKE ? OR number LIKE ?))`
 		args = append(args, like, like, like, like)
 	}
-	q += ` ORDER BY b.name COLLATE NOCASE, b.id, s.name COLLATE NOCASE`
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
-	supplies, err := scanSupplies(rows)
-	if err != nil {
-		return nil, err
-	}
-	slices.SortStableFunc(supplies, func(a, b Supply) int {
-		return cmp.Or(
-			compareBuildings(a.BuildingName, a.BuildingID, b.BuildingName, b.BuildingID),
-			CompareRoomNumbers(a.RoomNumber, b.RoomNumber),
-		)
-	})
-	return supplies, nil
+	return s.scanSupplies(rows)
 }
 
 func (s *Store) GetSupply(id int64) (*Supply, error) {
@@ -160,7 +147,7 @@ func (s *Store) GetSupply(id int64) (*Supply, error) {
 	if err != nil {
 		return nil, err
 	}
-	ss, err := scanSupplies(rows)
+	ss, err := s.scanSupplies(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -185,9 +172,9 @@ func (s *Store) SaveSupply(sp *Supply, userID int64) error {
 	}
 	if sp.ID != 0 {
 		// Counts can't be edited here, so check the stored ones.
-		res, err := s.DB.Exec(`UPDATE supplies SET building_id = ?, room_id = ?, name = ?, unit = ?, reorder_at = ?, notes = ?, reusable = ?
+		res, err := s.DB.Exec(`UPDATE supplies SET place_id = ?, name = ?, unit = ?, reorder_at = ?, notes = ?, reusable = ?
 			WHERE id = ? AND (? OR (in_use = 0 AND cleaning = 0))`,
-			sp.BuildingID, nullInt(sp.RoomID), sp.Name, sp.Unit, sp.ReorderAt, sp.Notes, sp.Reusable, sp.ID, sp.Reusable)
+			sp.PlaceID, sp.Name, sp.Unit, sp.ReorderAt, sp.Notes, sp.Reusable, sp.ID, sp.Reusable)
 		if err != nil {
 			return err
 		}
@@ -212,9 +199,9 @@ func (s *Store) SaveSupply(sp *Supply, userID int64) error {
 
 // insertSupplyTx adds a new supply and records its starting counts.
 func insertSupplyTx(tx *sql.Tx, sp *Supply, userID int64) error {
-	res, err := tx.Exec(`INSERT INTO supplies (building_id, room_id, name, unit, quantity, reorder_at, notes, reusable, in_use, cleaning)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sp.BuildingID, nullInt(sp.RoomID), sp.Name, sp.Unit, sp.Quantity, sp.ReorderAt, sp.Notes, sp.Reusable, sp.InUse, sp.Cleaning)
+	res, err := tx.Exec(`INSERT INTO supplies (place_id, name, unit, quantity, reorder_at, notes, reusable, in_use, cleaning)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sp.PlaceID, sp.Name, sp.Unit, sp.Quantity, sp.ReorderAt, sp.Notes, sp.Reusable, sp.InUse, sp.Cleaning)
 	if err != nil {
 		return err
 	}

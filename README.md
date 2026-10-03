@@ -1,7 +1,7 @@
 # Facility Maintenance Tracker
 
-Track buildings, rooms, and the equipment in them, with scheduled and recurring
-maintenance. A public dashboard shows what's overdue and coming up; signed-in
+Track your sites, buildings, rooms and the equipment in them, with scheduled
+and recurring maintenance. A public dashboard shows what's overdue and coming up; signed-in
 users make changes. Installable as an app (PWA) on phones and desktops.
 
 - **Backend:** Go, single static binary with templates/JS/CSS embedded
@@ -30,13 +30,14 @@ To run in production, see [Deploying](#deploying).
 
 | Area | What it does |
 |------|--------------|
-| Dashboard (`/`, public) | Status tiles (Overdue / Due soon / Upcoming / Not scheduled), per-building health, search and status filters (kept in the URL hash), building filter. Works offline once visited. |
-| Buildings → Rooms → Items | Items belong to a building and optionally a room (roofs, parking lots and HVAC units can be building-wide). An item can count a group of identical things (10 outlets, 15 lights) and use a supply that gets replaced (1 bulb or filter each); "Replace" records it and takes it from stock. A group's units are numbered #1, #2… (with optional location notes) so Replace, "Mark done" and other work can record which ones; units replaced 3 or more times in a year are flagged. Portable items (projectors, TV carts) have "Move", and every change of location is kept in their history. Room pages group items by category. Deleting a room keeps its items. |
+| Dashboard (`/`, public) | Status tiles (Overdue / Due soon / Upcoming / Not scheduled), per-building health, search and status filters (kept in the URL hash), and a filter for any building, floor or zone. Works offline once visited. |
+| Places | One tree: Site › Building › Floor › Zone › Room › Area. A place goes inside any higher level, so levels can be skipped: a porch is a zone right inside its building, a closet off a hallway is a room in a zone, a stage is an area in a room. With one site (the usual case) it's created for you and never asked about. A place's page shows what's in it and rolls up problems, supplies and tasks from everything inside; moving a place takes its contents along; deleting one moves its contents up a level. Optional tags (e.g. "classrooms", "media") group places across buildings, with a page per tag and tag filters on Items, Supplies and Problems. Add places one at a time or paste a list. Links and QR codes from before places (`/rooms/3`, `/report?room=3`) still work. |
+| Items | Items belong to a place at any level (a mailbox on the site, AC units on a building, lights on a porch). An item can count a group of identical things (10 outlets, 15 lights) and use a supply that gets replaced (1 bulb or filter each); "Replace" records it and takes it from stock. A group's units are numbered #1, #2… (with optional location notes) so Replace, "Mark done" and other work can record which ones; units replaced 3 or more times in a year are flagged. Portable items (projectors, TV carts) have "Move", and every change of location is kept in their history. Place pages group items by category. |
 | Tasks | One-time or recurring (every N days/weeks/months/years). "Next due" is calculated from "last done" or set by hand. Month math clamps (Jan 31 + 1 month = Feb 28). |
 | Mark done | Logs date, who, cost and notes, then rolls the task forward. Back-dated entries never move the schedule backwards. One-time tasks close. |
 | History | Per-item and site-wide maintenance logs, including ad-hoc "other work". |
 | Supplies | Counts of things that get used up (paper towels, filters, bulbs) or washed and reused (mop heads), with a history of every change and low-stock flags. Tasks can take a supply each time they're done. |
-| Problems | Report a problem against a building, room or item; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report at `/report` without signing in (off by default, 10 reports an hour per device, with a honeypot field for bots). Room and building pages print QR codes that open the report form for that room. |
+| Problems | Report a problem against a place or an item in it; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report at `/report` without signing in (off by default, 10 reports an hour per device, with a honeypot field for bots). Any place's page prints a QR code that opens the report form for it, or a sheet of codes for everything inside it. |
 | Users | Admins manage users, settings (site name, site address, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
 
 ## Stimulus autoloader
@@ -85,7 +86,7 @@ report problems without signing in.
 maintenance-tracker create-user alice [--admin]   # prompts for a password (10+ characters)
 maintenance-tracker reset-password alice
 maintenance-tracker backup /path/backup.db        # safe while the app is running
-maintenance-tracker seed-demo                     # sample buildings, items and tasks
+maintenance-tracker seed-demo                     # sample places, items and tasks
 ```
 
 They use the same database as the server, so pass the same `-db` (or `DB_PATH`)

@@ -1,0 +1,49 @@
+{{define "content"}}
+<div class="page-head"><div><h1>{{.Title}}</h1></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="{{if .Form.ID}}/places/{{.Form.ID}}{{else}}/places{{end}}" class="form"
+        data-controller="reveal place-picker" data-action="change->reveal#update change->place-picker#kindChanged">
+    {{template "csrf" .CSRF}}
+    <fieldset class="fieldset">
+      <legend>What is it?</legend>
+      <div class="segmented" role="radiogroup" aria-label="Kind of place">
+        {{range .Kinds}}<label><input type="radio" name="kind" value="{{.}}" data-level="{{kindLevel .}}" {{if eq . $.Form.Kind}}checked{{end}}> {{kindLabel .}}</label>{{end}}
+      </div>
+      {{range .Kinds}}<p class="hint" data-reveal-target="section" data-reveal-when="kind={{.}}">{{kindHint .}}</p>{{end}}
+    </fieldset>
+    {{if not .Empty}}
+      <div data-reveal-target="section" data-reveal-when="kind=building kind=floor kind=zone kind=room kind=area">
+        {{template "place-select" (dict "Name" "parent_id" "Places" .Parents "Selected" .Form.ParentID "Label" "Inside" "Required" true "Blank" "Choose…")}}
+      </div>
+    {{end}}
+    <div class="field-row">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" value="{{.Form.Name}}" required autofocus maxlength="100" placeholder="e.g. Sanctuary, 2nd floor, East wing, Nursery, Stage">
+      </div>
+      <div class="field field--narrow" data-reveal-target="section" data-reveal-when="kind=building kind=floor kind=zone kind=room kind=area">
+        <label for="number">Number <span class="optional">optional</span></label>
+        <input id="number" name="number" value="{{.Form.Number}}" maxlength="20" placeholder="e.g. 104">
+      </div>
+    </div>
+    <div class="field" data-reveal-target="section" data-reveal-when="kind=site kind=building">
+      <label for="address">Address <span class="optional">optional</span></label>
+      <input id="address" name="address" value="{{.Form.Address}}" autocomplete="street-address">
+    </div>
+    <div class="field">
+      <label for="tags">Tags <span class="optional">optional</span></label>
+      <input id="tags" name="tags" value="{{.Form.TagText}}" placeholder="e.g. classrooms, media">
+      <p class="hint">Separate tags with commas. Tags group places across buildings so you can see them together.{{if .Tags}} In use: {{range $i, $t := .Tags}}{{if $i}}, {{end}}{{$t.Name}}{{end}}.{{end}}</p>
+    </div>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="3" placeholder="Key holders, water shut-off location, etc.">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn btn--ghost" href="{{if .Form.ID}}/places/{{.Form.ID}}{{else if .Form.ParentID}}/places/{{.Form.ParentID}}{{else}}/places{{end}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

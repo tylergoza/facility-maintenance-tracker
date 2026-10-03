@@ -11,7 +11,7 @@
     <div class="field">
       <label for="site_url">Site address <span class="optional">optional</span></label>
       <input id="site_url" name="site_url" value="{{.SiteURLValue}}" inputmode="url" autocomplete="off" placeholder="{{.GuessedURL}}">
-      <p class="hint">The address people use to reach this site, starting with <code>https://</code> when it's behind a reverse proxy with a certificate. Used for links and QR codes printed for rooms. Leave blank to use the address you're on now ({{.GuessedURL}}).</p>
+      <p class="hint">The address people use to reach this site, starting with <code>https://</code> when it's behind a reverse proxy with a certificate. Used for links and QR codes printed for places. Leave blank to use the address you're on now ({{.GuessedURL}}).</p>
     </div>
     <div class="field">
       <label for="due_soon_days">"Due soon" window (days)</label>
@@ -22,14 +22,14 @@
       <input type="checkbox" name="public_reports" value="1" {{if .PublicReportsValue}}checked{{end}}>
       Let anyone report a problem without signing in
     </label>
-    <p class="hint">Adds a "Report a problem" link for visitors at <code>{{.ReportURL}}</code>. Print QR codes from a room's page, or for every room at once from a building's page. Signed-in users can always report problems. Reports are limited to 10 an hour from each device.</p>
+    <p class="hint">Adds a "Report a problem" link for visitors at <code>{{.ReportURL}}</code>. Print QR codes from any place's page, one at a time or for everything inside it at once. Signed-in users can always report problems. Reports are limited to 10 an hour from each device.</p>
     <div class="form__actions"><button type="submit" class="btn btn--primary">Save settings</button></div>
   </form>
 </div>
 
 <div class="card narrow">
   <h2>Backup</h2>
-  <p>This site holds {{pluralize .Counts.Buildings "building"}}, {{pluralize .Counts.Rooms "room"}}, {{pluralize .Counts.Items "item"}} and {{pluralize .Counts.Tasks "active task"}}.</p>
+  <p>This site holds {{pluralize .Counts.Places "place"}}, {{pluralize .Counts.Items "item"}} and {{pluralize .Counts.Tasks "active task"}}.</p>
   <p>Download a complete copy of the database. To move the site to another server, stop the app there, put this file at its database path, and start it again.</p>
   <a class="btn" href="/admin/backup" download>Download backup</a>
 </div>

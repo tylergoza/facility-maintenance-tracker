@@ -1,7 +1,7 @@
 {{define "content"}}
 {{$i := .Item}}
 <nav class="crumbs" aria-label="Breadcrumb">
-  <a href="/buildings/{{$i.BuildingID}}">{{$i.BuildingName}}</a>{{if $i.RoomID}} › <a href="/rooms/{{$i.RoomID}}">{{roomLabel $i.RoomNumber $i.RoomName}}</a>{{end}}
+  <a href="/places">Places</a>{{range .Crumbs}} › <a href="/places/{{.ID}}">{{.Label}}</a>{{end}}
 </nav>
 <div class="page-head">
   <div>

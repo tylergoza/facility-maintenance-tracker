@@ -1,0 +1,44 @@
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1>Places</h1>
+    <p class="muted">Buildings and everything in them: floors, zones, rooms and areas.</p>
+  </div>
+  <div class="page-head__actions">
+    <a class="btn btn--primary" href="/places/new">Add a building</a>
+    {{if .Places}}<a class="btn btn--ghost btn--sm" href="/places/new?kind=site">Add a site</a>{{end}}
+  </div>
+</div>
+{{if .Tags}}
+  <p class="chips"><span class="muted small">Tags:</span>
+    {{range .Tags}}<a class="chip" href="/places?tag={{.Name}}">{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}
+  </p>
+{{end}}
+{{if .Places}}
+  <ul class="tree">
+    {{range .Places}}
+      {{$h := index $.Health .ID}}
+      <li class="tree__row tree__row--d{{.Depth}}">
+        <div class="tree__main">
+          <a href="/places/{{.ID}}"><strong>{{.Label}}</strong></a>
+          <span class="kind">{{if and $.SingleSite (eq .Kind "site")}}Whole site{{else}}{{.KindLabel}}{{end}}</span>
+          {{template "tag-chips" .Tags}}
+        </div>
+        <div class="tree__meta small">
+          {{if .ProblemTotal}}<span class="badge badge--problem-open">{{pluralize .ProblemTotal "problem"}}</span>{{end}}
+          {{if $h.Overdue}}<span class="badge badge--overdue">{{$h.Overdue}} overdue</span>{{end}}
+          {{if $h.DueSoon}}<span class="badge badge--due-soon">{{$h.DueSoon}} due soon</span>{{end}}
+          <span class="muted">{{if eq .ItemTotal .ItemCount}}{{pluralize .ItemCount "item"}}{{else}}{{pluralize .ItemCount "item"}} here, {{.ItemTotal}} in all{{end}}</span>
+        </div>
+      </li>
+    {{end}}
+  </ul>
+  <p class="hint">A place can sit inside any place higher up the list: site › building › floor › zone › room › area. Skip the levels you don't need, like a porch that's a zone right inside its building. Tags group places across buildings, like "classrooms".</p>
+{{else}}
+  <div class="empty">
+    <h2>No places yet</h2>
+    <p>Start with a building, e.g. "Sanctuary" or "Fellowship Hall". Then add its rooms, and floors or zones if they help.</p>
+    <p><a class="btn btn--primary" href="/places/new">Add a building</a></p>
+  </div>
+{{end}}
+{{end}}

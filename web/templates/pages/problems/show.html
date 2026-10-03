@@ -1,7 +1,7 @@
 {{define "content"}}
 {{$p := .Problem}}
 <nav class="crumbs" aria-label="Breadcrumb">
-  <a href="/problems">Problems</a> › <a href="/buildings/{{$p.BuildingID}}">{{$p.BuildingName}}</a>{{if $p.RoomID}} › <a href="/rooms/{{$p.RoomID}}">{{roomLabel $p.RoomNumber $p.RoomName}}</a>{{end}}
+  <a href="/problems">Problems</a> › <a href="/places/{{$p.PlaceID}}">{{$p.Location}}</a>
 </nav>
 <div class="page-head">
   <div>

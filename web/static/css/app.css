@@ -423,6 +423,36 @@ select:disabled { opacity: .6; }
 .supply-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 0 0 6px; }
 .supply-buckets dt { color: var(--muted); font-size: .85rem; }
 .supply-buckets dd { margin: 4px 0 0; display: flex; align-items: baseline; gap: 8px; }
+/* Places: the tree on /places, tags, and the picker's narrowing box */
+.tree { list-style: none; margin: 16px 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.tree__row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px;
+  padding: 8px 14px; border-top: 1px solid var(--border);
+}
+.tree__row:first-child { border-top: 0; }
+.tree__row--d1 { padding-left: 38px; }
+.tree__row--d2 { padding-left: 62px; }
+.tree__row--d3 { padding-left: 86px; }
+.tree__row--d4 { padding-left: 110px; }
+.tree__row--d5 { padding-left: 134px; }
+.tree__main, .tree__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.kind { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chip {
+  display: inline-block; padding: 1px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); font-size: .8rem; font-weight: 500; text-decoration: none;
+}
+a.chip:hover { border-color: var(--primary); }
+.chip--lg { font-size: 1rem; padding: 2px 14px; vertical-align: middle; }
+.place-filter { margin-bottom: 6px; }
+@media (max-width: 640px) {
+  .tree__row--d1 { padding-left: 26px; }
+  .tree__row--d2 { padding-left: 38px; }
+  .tree__row--d3 { padding-left: 50px; }
+  .tree__row--d4 { padding-left: 62px; }
+  .tree__row--d5 { padding-left: 74px; }
+}
+
 .segmented { display: flex; flex-wrap: wrap; gap: 6px; }
 .segmented label {
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer;

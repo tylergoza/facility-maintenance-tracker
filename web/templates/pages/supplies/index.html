@@ -1,17 +1,13 @@
 {{define "content"}}
 <div class="page-head">
-  <div><h1>Supplies</h1><p class="muted">Supplies on hand, in use and out for cleaning, across all buildings.</p></div>
-  <a class="btn btn--primary" href="/supplies/new{{if .Filter.BuildingID}}?building={{.Filter.BuildingID}}{{end}}">Add supply</a>
+  <div><h1>Supplies</h1><p class="muted">Supplies on hand, in use and out for cleaning, everywhere.</p></div>
+  <a class="btn btn--primary" href="/supplies/new{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Add supply</a>
 </div>
 <form method="get" action="/supplies" class="toolbar" data-controller="autosubmit">
   <label class="sr-only" for="q">Search</label>
-  <input id="q" type="search" name="q" value="{{.Filter.Query}}" placeholder="Search supplies, rooms…"
+  <input id="q" type="search" name="q" value="{{.Filter.Query}}" placeholder="Search supplies, places…"
          data-action="input->autosubmit#debounced">
-  <label class="sr-only" for="building">Building</label>
-  <select id="building" name="building" data-action="autosubmit#submit">
-    <option value="">All buildings</option>
-    {{range .Buildings}}<option value="{{.ID}}" {{if eq .ID $.Filter.BuildingID}}selected{{end}}>{{.Name}}</option>{{end}}
-  </select>
+  {{template "place-filter" (dict "Places" .Places "Selected" .Filter.PlaceID "Tags" .Tags "Tag" .Filter.Tag)}}
   <label class="check"><input type="checkbox" name="low" value="1" {{if .Filter.LowOnly}}checked{{end}} data-action="autosubmit#submit"> Low or out only</label>
   <noscript><button class="btn btn--sm">Filter</button></noscript>
 </form>
@@ -19,7 +15,7 @@
   {{template "supply-table" (dict "Supplies" .Supplies "ShowLocation" true "CSRF" .CSRF "Next" .URI)}}
 {{else}}
   <div class="empty">
-    {{if or .Filter.Query .Filter.BuildingID .Filter.LowOnly}}<p>No supplies match.</p>{{else}}<h2>No supplies yet</h2><p>Track things that get used up: paper towels, light bulbs, furnace filters, cleaning supplies…</p>{{end}}
+    {{if or .Filter.Query .Filter.PlaceID .Filter.Tag .Filter.LowOnly}}<p>No supplies match.</p>{{else}}<h2>No supplies yet</h2><p>Track things that get used up: paper towels, light bulbs, furnace filters, cleaning supplies…</p>{{end}}
   </div>
 {{end}}
 {{end}}

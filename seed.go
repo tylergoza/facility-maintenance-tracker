@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"time"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 )
+
+var errSeedSites = errors.New("there are several sites; seed-demo only fills an empty database")
 
 // seedDemo fills an empty database with realistic sample data so the
 // dashboard has something to show. Dates are relative to today.
@@ -20,15 +23,27 @@ func seedDemo(st *store.Store) error {
 		name, category, room string
 		tasks                []task
 	}
-	type room struct{ number, name string }
+	// room places go inside the place named in "in" ("" = the building).
+	type room struct {
+		kind, number, name, in string
+		tags                   []string
+	}
 	type building struct {
 		name, address string
 		rooms         []room
 		items         []item
 	}
+	floor := func(name string) room { return room{kind: store.KindFloor, name: name} }
+	in := func(where, number, name string, tags ...string) room {
+		return room{kind: store.KindRoom, number: number, name: name, in: where, tags: tags}
+	}
 
 	data := []building{
-		{"Sanctuary", "100 Church St", []room{{"100", "Worship Hall"}, {"104", "Nursery"}, {"B1", "Boiler Room"}, {"201", "Sound Booth"}}, []item{
+		{"Sanctuary", "100 Church St", []room{
+			floor("Basement"), floor("1st floor"), floor("Balcony"),
+			in("1st floor", "100", "Worship Hall"), in("1st floor", "104", "Nursery", "kids"), in("Basement", "B1", "Boiler Room"),
+			in("Balcony", "201", "Sound Booth", "media"), {kind: store.KindZone, name: "Front porch"},
+		}, []item{
 			{"Furnace (north)", "HVAC", "Boiler Room", []task{{"Replace air filter", "months", 3, -12, 102}, {"Annual service & inspection", "years", 1, 45, 320}}},
 			{"Water heater", "Plumbing", "Boiler Room", []task{{"Flush tank", "years", 1, 9, 356}}},
 			{"Smoke detectors", "Safety", "Nursery", []task{{"Test alarms", "months", 1, 3, 27}, {"Replace batteries", "years", 1, 160, 205}}},
@@ -37,13 +52,15 @@ func seedDemo(st *store.Store) error {
 			{"Roof", "Roof", "", []task{{"Inspect roof & clear gutters", "months", 6, -3, 186}}},
 			{"Fire extinguishers", "Safety", "", []task{{"Annual certification", "years", 1, 120, 245}}},
 		}},
-		{"Fellowship Hall", "100 Church St (rear)", []room{{"110", "Kitchen"}, {"112", "Classroom 1"}, {"114", "Classroom 2"}}, []item{
+		{"Fellowship Hall", "100 Church St (rear)", []room{
+			in("", "110", "Kitchen"), {kind: store.KindZone, name: "Classrooms", tags: []string{"kids"}},
+			in("Classrooms", "112", "Classroom 1"), in("Classrooms", "114", "Classroom 2"),
+		}, []item{
 			{"Commercial range hood", "Kitchen", "Kitchen", []task{{"Clean grease filters", "months", 3, 25, 65}, {"Fire suppression inspection", "months", 6, -30, 210}}},
 			{"Refrigerator", "Kitchen", "Kitchen", []task{{"Clean condenser coils", "months", 6, 100, 80}}},
 			{"Mini-split AC", "HVAC", "Classroom 1", []task{{"Clean filters", "months", 1, 12, 18}}},
-			{"Parking lot", "Grounds", "", []task{{"Re-stripe lines", "years", 3, 400, 700}}},
 		}},
-		{"Parsonage", "12 Elm St", []room{{"", "Basement"}, {"", "Kitchen"}}, []item{
+		{"Parsonage", "12 Elm St", []room{in("", "", "Basement"), in("", "", "Kitchen")}, []item{
 			{"Sump pump", "Plumbing", "Basement", []task{{"Test pump", "months", 3, 40, 50}}},
 			{"Dryer vent", "Safety", "Basement", []task{{"Clean dryer vent", "years", 1, 0, 0}}},
 		}},
@@ -82,6 +99,7 @@ func seedDemo(st *store.Store) error {
 			{"Ceiling pendants", "Lighting", "Worship Hall", 8, "Light bulbs (LED A19)", 1, false},
 			{"Electrical outlets", "Electrical", "Worship Hall", 12, "", 0, false},
 			{"Exit signs", "Safety", "Worship Hall", 2, "", 0, false},
+			{"Porch lights", "Lighting", "Front porch", 4, "Light bulbs (LED A19)", 1, false},
 			{"Ceiling cans", "Lighting", "Nursery", 6, "LED BR30 bulbs", 1, false},
 			{"Electrical outlets", "Electrical", "Nursery", 6, "", 0, false},
 			{"Light switches", "Electrical", "Nursery", 2, "", 0, false},
@@ -112,22 +130,39 @@ func seedDemo(st *store.Store) error {
 		"Replace batteries":  "AA batteries",
 	}
 
+	site, err := st.EnsureSite(st.Setting("site_name", "Facility Maintenance"))
+	if err != nil {
+		return err
+	}
+	if site == 0 {
+		return errSeedSites
+	}
+	// The parking lot is the whole site's, not any one building's.
+	lot := &store.Item{PlaceID: site, Name: "Parking lot", Category: "Grounds"}
+	if err := st.SaveItem(lot, nil, 0); err != nil {
+		return err
+	}
+	if err := st.SaveTask(&store.Task{ItemID: lot.ID, Name: "Re-stripe lines", IntervalValue: 3, IntervalUnit: "years", Active: true,
+		NextDueOn: day(400), LastCompletedOn: day(-700), SupplyAmount: 1, SupplyAlways: true}); err != nil {
+		return err
+	}
+
 	for _, bd := range data {
-		b := &store.Building{Name: bd.name, Address: bd.address}
-		if err := st.SaveBuilding(b); err != nil {
+		b := &store.Place{ParentID: site, Kind: store.KindBuilding, Name: bd.name, Address: bd.address}
+		if err := st.SavePlace(b); err != nil {
 			return err
 		}
-		rooms := map[string]int64{}
+		rooms := map[string]int64{"": b.ID}
 		for _, rn := range bd.rooms {
-			r := &store.Room{BuildingID: b.ID, Number: rn.number, Name: rn.name}
-			if err := st.SaveRoom(r); err != nil {
+			r := &store.Place{ParentID: rooms[rn.in], Kind: rn.kind, Number: rn.number, Name: rn.name, Tags: rn.tags}
+			if err := st.SavePlace(r); err != nil {
 				return err
 			}
 			rooms[rn.name] = r.ID
 		}
 		supplyIDs := map[string]int64{}
 		for _, sp := range supplies[bd.name] {
-			supply := &store.Supply{BuildingID: b.ID, RoomID: rooms[sp.room], Name: sp.name, Unit: sp.unit, Quantity: sp.quantity, ReorderAt: sp.low}
+			supply := &store.Supply{PlaceID: rooms[sp.room], Name: sp.name, Unit: sp.unit, Quantity: sp.quantity, ReorderAt: sp.low}
 			if sp.name == "Mop heads" {
 				supply.Reusable, supply.InUse, supply.Cleaning = true, 2, 1
 			}
@@ -137,13 +172,13 @@ func seedDemo(st *store.Store) error {
 			supplyIDs[sp.name] = supply.ID
 		}
 		for _, pr := range problems[bd.name] {
-			p := &store.Problem{BuildingID: b.ID, RoomID: rooms[pr.room], Title: pr.title, Details: pr.details, ReporterName: pr.reporter}
+			p := &store.Problem{PlaceID: rooms[pr.room], Title: pr.title, Details: pr.details, ReporterName: pr.reporter}
 			if err := st.CreateProblem(p); err != nil {
 				return err
 			}
 		}
 		for _, it := range bd.items {
-			i := &store.Item{BuildingID: b.ID, RoomID: rooms[it.room], Name: it.name, Category: it.category}
+			i := &store.Item{PlaceID: rooms[it.room], Name: it.name, Category: it.category}
 			if err := st.SaveItem(i, nil, 0); err != nil {
 				return err
 			}
@@ -168,7 +203,7 @@ func seedDemo(st *store.Store) error {
 			}
 		}
 		for _, c := range countedItems[bd.name] {
-			i := &store.Item{BuildingID: b.ID, RoomID: rooms[c.room], Name: c.name, Category: c.category, Quantity: c.quantity,
+			i := &store.Item{PlaceID: rooms[c.room], Name: c.name, Category: c.category, Quantity: c.quantity,
 				SupplyID: supplyIDs[c.supply], SupplyPer: c.per, Portable: c.portable}
 			var sp *store.Supply
 			if def, ok := newSupplies[c.supply]; ok && i.SupplyID == 0 {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -31,9 +32,9 @@ type taskGroups struct {
 
 var groupOrder = []store.Status{store.StatusOverdue, store.StatusDueSoon, store.StatusUpcoming, store.StatusUnscheduled}
 
-// groupTasks buckets active tasks by status. Within each bucket tasks are
-// ordered by room number (unnumbered rooms and building-wide items last),
-// keeping the incoming due-date order as the tie-breaker.
+// groupTasks buckets active tasks by status. Within each bucket tasks go
+// place by place, rooms before the floor or building they're in, keeping
+// the incoming due-date order as the tie-breaker.
 func (s *Server) groupTasks(tasks []store.Task) taskGroups {
 	byStatus := map[store.Status][]store.Task{}
 	for _, t := range tasks {
@@ -43,7 +44,7 @@ func (s *Server) groupTasks(tasks []store.Task) taskGroups {
 	g := taskGroups{Counts: map[store.Status]int{}, Total: len(tasks)}
 	for _, st := range groupOrder {
 		slices.SortStableFunc(byStatus[st], func(a, b store.Task) int {
-			return store.CompareRoomNumbers(a.RoomNumber, b.RoomNumber)
+			return cmp.Compare(a.Place.PostOrder, b.Place.PostOrder)
 		})
 		g.Groups = append(g.Groups, taskGroup{Status: st, Tasks: byStatus[st]})
 		g.Counts[st] = len(byStatus[st])
@@ -74,14 +75,22 @@ func (b buildingHealth) Worst() store.Status {
 	return store.StatusUnscheduled
 }
 
-func (s *Server) buildingHealth(tasks []store.Task) map[int64]*buildingHealth {
-	out := map[int64]*buildingHealth{}
-	for _, t := range tasks {
-		h := out[t.BuildingID]
-		if h == nil {
-			h = &buildingHealth{ID: t.BuildingID, Name: t.BuildingName}
-			out[t.BuildingID] = h
+// buildingHealth counts tasks by status for each building, in tree order.
+// Things outside any building count toward their site, which is listed
+// only when it has some.
+func (s *Server) buildingHealth(tree *store.Places, tasks []store.Task) []buildingHealth {
+	byID := map[int64]*buildingHealth{}
+	for _, p := range tree.All() {
+		if p.Kind == store.KindBuilding || p.Kind == store.KindSite {
+			byID[p.ID] = &buildingHealth{ID: p.ID, Name: p.Label()}
 		}
+	}
+	for _, t := range tasks {
+		b, ok := tree.Building(t.PlaceID)
+		if !ok {
+			continue
+		}
+		h := byID[b.ID]
 		h.Total++
 		switch s.status(t.NextDueOn) {
 		case store.StatusOverdue:
@@ -94,6 +103,12 @@ func (s *Server) buildingHealth(tasks []store.Task) map[int64]*buildingHealth {
 			h.Unscheduled++
 		}
 	}
+	var out []buildingHealth
+	for _, p := range tree.All() {
+		if h := byID[p.ID]; h != nil && (p.Kind == store.KindBuilding || h.Total > 0) {
+			out = append(out, *h)
+		}
+	}
 	return out
 }
 
@@ -104,18 +119,22 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
-	buildingID := queryInt(r, "building")
-	tasks, err := s.store.ListTasks(store.TaskFilter{BuildingID: buildingID, ActiveOnly: true})
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	buildings, err := s.store.ListBuildings()
+	placeID := queryInt(r, "place")
+	selected, ok := tree.Get(placeID)
+	if !ok {
+		placeID = 0
+	}
+	tasks, err := s.store.ListTasks(store.TaskFilter{PlaceID: placeID, ActiveOnly: true})
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	lowSupplies, err := s.store.ListSupplies(store.SupplyFilter{BuildingID: buildingID, LowOnly: true})
+	lowSupplies, err := s.store.ListSupplies(store.SupplyFilter{PlaceID: placeID, LowOnly: true})
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -124,34 +143,21 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// users see them.
 	var problems []store.Problem
 	if currentUser(r) != nil {
-		if problems, err = s.store.ListProblems(store.ProblemFilter{BuildingID: buildingID, Status: "active"}); err != nil {
+		if problems, err = s.store.ListProblems(store.ProblemFilter{PlaceID: placeID, Status: "active"}); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
 	}
 	var health []buildingHealth
-	if buildingID == 0 {
-		hm := s.buildingHealth(tasks)
-		for _, b := range buildings {
-			if h, ok := hm[b.ID]; ok {
-				health = append(health, *h)
-			} else {
-				health = append(health, buildingHealth{ID: b.ID, Name: b.Name})
-			}
-		}
-	}
-	var selected *store.Building
-	for i := range buildings {
-		if buildings[i].ID == buildingID {
-			selected = &buildings[i]
-		}
+	if placeID == 0 {
+		health = s.buildingHealth(tree, tasks)
 	}
 	title := "Maintenance dashboard"
-	if selected != nil {
-		title = selected.Name
+	if placeID != 0 {
+		title = selected.Path
 	}
 	s.render(w, r, http.StatusOK, "dashboard", map[string]any{
-		"Title": title, "Buildings": buildings, "Selected": selected, "BuildingID": buildingID,
+		"Title": title, "Places": filterPlaces(tree, true), "Selected": selected, "PlaceID": placeID,
 		"Tasks": s.groupTasks(tasks), "Health": health, "LowSupplies": lowSupplies, "Problems": problems, "DueSoonDays": s.DueSoonDays(),
 		"Updated": time.Now().Format("Mon Jan 2, 3:04 PM"),
 	})

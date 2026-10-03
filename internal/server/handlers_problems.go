@@ -34,14 +34,10 @@ func (s *Server) absURL(r *http.Request, path string) string {
 
 // Reporting ----------------------------------------------------------------
 
-// problemFormData loads what the report and edit forms pick from:
-// buildings, rooms, and items (filtered to the chosen room in the browser).
+// problemFormData loads what the report and edit forms pick from: places,
+// and items (narrowed to the chosen place in the browser).
 func (s *Server) problemFormData() (map[string]any, error) {
-	buildings, err := s.store.ListBuildings()
-	if err != nil {
-		return nil, err
-	}
-	rooms, err := s.store.ListRooms(0)
+	tree, err := s.store.Places()
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +45,7 @@ func (s *Server) problemFormData() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"Buildings": buildings, "Rooms": rooms, "Items": items}, nil
+	return map[string]any{"Places": tree.All(), "Items": itemOptions(tree, items)}, nil
 }
 
 func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, errs []string) {
@@ -65,11 +61,15 @@ func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status
 // problemFromForm reads what and where. Reporter fields are only read for
 // people who aren't signed in.
 func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter bool) []string {
-	p.BuildingID, p.RoomID, p.ItemID = formInt(r, "building_id"), formInt(r, "room_id"), formInt(r, "item_id")
+	p.PlaceID, p.ItemID = formInt(r, "place_id"), formInt(r, "item_id")
 	p.Title, p.Details = formStr(r, "title"), formStr(r, "details")
 	var errs []string
-	if _, err := s.store.GetBuilding(p.BuildingID); err != nil {
-		errs = append(errs, "Choose a building.")
+	tree, err := s.store.Places()
+	if err != nil {
+		return []string{"Couldn't check the place. Please try again."}
+	}
+	if _, ok := tree.Get(p.PlaceID); !ok {
+		errs = append(errs, "Choose where it is.")
 	}
 	if p.Title == "" {
 		errs = append(errs, "Say briefly what's wrong.")
@@ -81,21 +81,16 @@ func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter boo
 		errs = append(errs, tooLong("Name", p.ReporterName, 100)...)
 		errs = append(errs, tooLong("Contact", p.ReporterContact, 200)...)
 	}
-	if p.RoomID != 0 {
-		room, err := s.store.GetRoom(p.RoomID)
-		if err != nil || room.BuildingID != p.BuildingID {
-			errs = append(errs, "The selected room is not in the selected building.")
-		}
-	}
+	// Naming the item pins down the place: the problem goes where it is.
 	if p.ItemID != 0 {
 		item, err := s.store.GetItem(p.ItemID)
 		switch {
-		case err != nil || item.BuildingID != p.BuildingID:
-			errs = append(errs, "That item is not in the selected building.")
-		case p.RoomID != 0 && item.RoomID != p.RoomID:
-			errs = append(errs, "That item is not in the selected room.")
+		case err != nil:
+			errs = append(errs, "That item no longer exists.")
+		case !tree.Within(item.PlaceID, p.PlaceID):
+			errs = append(errs, "That item isn't in the place you chose.")
 		default:
-			p.ItemName, p.RoomID = item.Name, item.RoomID
+			p.ItemName, p.PlaceID = item.Name, item.PlaceID
 		}
 	}
 	return errs
@@ -109,12 +104,13 @@ func tooLong(field, v string, limit int) []string {
 }
 
 func (s *Server) handleReportForm(w http.ResponseWriter, r *http.Request) {
-	p := store.Problem{BuildingID: queryInt(r, "building"), RoomID: queryInt(r, "room")}
-	if room, err := s.store.GetRoom(p.RoomID); err == nil {
-		p.BuildingID = room.BuildingID
+	p := store.Problem{PlaceID: queryInt(r, "place")}
+	// QR codes printed before places used ?building= and ?room=.
+	if id, err := s.store.LegacyPlace(queryInt(r, "building"), queryInt(r, "room")); err == nil {
+		p.PlaceID = id
 	}
 	if item, err := s.store.GetItem(queryInt(r, "item")); err == nil {
-		p.ItemID, p.ItemName, p.BuildingID, p.RoomID = item.ID, item.Name, item.BuildingID, item.RoomID
+		p.ItemID, p.ItemName, p.PlaceID = item.ID, item.Name, item.PlaceID
 	}
 	s.renderReportForm(w, r, http.StatusOK, p, nil)
 }
@@ -159,7 +155,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := store.ProblemFilter{BuildingID: queryInt(r, "building"), Status: q.Get("status")}
+	f := store.ProblemFilter{PlaceID: queryInt(r, "place"), Tag: q.Get("tag"), Status: q.Get("status")}
 	if f.Status == "" {
 		f.Status = "active"
 	} else if f.Status == "all" {
@@ -174,13 +170,13 @@ func (s *Server) handleProblems(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	buildings, err := s.store.ListBuildings()
+	tree, err := s.store.Places()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	s.render(w, r, http.StatusOK, "problems/index", map[string]any{
-		"Title": "Problems", "Problems": problems, "Buildings": buildings, "Filter": f, "StatusParam": q.Get("status"), "Mine": mine,
+		"Title": "Problems", "Problems": problems, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f, "StatusParam": q.Get("status"), "Mine": mine,
 	})
 }
 

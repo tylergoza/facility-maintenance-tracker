@@ -116,7 +116,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.redirect(w, r, "/buildings", "Your administrator account is ready. Start by adding a building.")
+	s.redirect(w, r, "/places/new", "Your administrator account is ready. Start by adding a building.")
 }
 
 func validateNewUser(username, password, confirm string) []string {

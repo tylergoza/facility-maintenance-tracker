@@ -1,0 +1,30 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/places">Places</a></nav>
+<div class="page-head">
+  <div>
+    <h1>Tagged <span class="chip chip--lg">{{.Tag}}</span></h1>
+    <p class="muted">{{pluralize (len .Places) "place"}} · {{pluralize .ItemTotal "item"}} in them</p>
+  </div>
+  <div class="page-head__actions">
+    <a class="btn btn--sm" href="/items?tag={{.Tag}}">Items</a>
+    <a class="btn btn--sm" href="/supplies?tag={{.Tag}}">Supplies</a>
+    <a class="btn btn--ghost btn--sm" href="/problems?tag={{.Tag}}&amp;status=all">All problems</a>
+  </div>
+</div>
+<div class="card-grid card-grid--compact">
+  {{range .Places}}
+    <a class="card card--link" href="/places/{{.ID}}">
+      <strong>{{.Label}}</strong>
+      <span class="muted small">{{.KindLabel}}{{if ne .Path .Label}} · {{.Path}}{{end}}</span>
+      <span class="muted small">{{pluralize .ItemTotal "item"}}</span>
+      {{if .ProblemTotal}}<span><span class="badge badge--problem-open">{{pluralize .ProblemTotal "problem"}}</span></span>{{end}}
+    </a>
+  {{end}}
+</div>
+{{if .Problems}}
+<section class="section">
+  <h2 class="section__title">Reported problems <span class="count">{{len .Problems}}</span></h2>
+  {{template "problem-table" (dict "Problems" .Problems "ShowLocation" true)}}
+</section>
+{{end}}
+{{end}}
