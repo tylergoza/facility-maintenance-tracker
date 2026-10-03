@@ -128,3 +128,7 @@ make test
 
 These cover the scheduling rules, sessions, CSRF, login rate limiting, and an
 end-to-end flow that renders every page.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
