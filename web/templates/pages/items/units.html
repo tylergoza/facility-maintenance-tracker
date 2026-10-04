@@ -3,21 +3,27 @@
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{$i.ID}}">{{$i.Name}}</a> <span class="muted">· {{$i.Location}}</span></nav>
 <div class="page-head">
   <div>
-    <h1>Location notes</h1>
-    <p class="muted">{{$i.Name}} #1–#{{$i.Quantity}}. A short note helps whoever's fixing it find the right one.</p>
+    <h1>IDs and notes</h1>
+    <p class="muted">{{$i.Name}} #1–#{{$i.Quantity}}. The ID is what's on each one's sticker and stays with it when it moves; clear it to give it the next free number. A short note helps whoever's fixing it find the right one.</p>
   </div>
 </div>
 <div class="card narrow">
   <form method="post" action="/items/{{$i.ID}}/units" class="form">
     {{template "csrf" .CSRF}}
     {{range .Units}}
-      <div class="field">
-        <label for="label_{{.Number}}">#{{.Number}} <span class="optional">optional</span></label>
-        <input id="label_{{.Number}}" name="label_{{.Number}}" value="{{.Label}}" maxlength="100" placeholder="e.g. Over the stage, left">
+      <div class="field-row">
+        <div class="field field--narrow">
+          <label for="id_{{.Number}}">#{{.Number}} ID</label>
+          <input id="id_{{.Number}}" name="id_{{.Number}}" value="{{.ID}}" maxlength="40">
+        </div>
+        <div class="field">
+          <label for="label_{{.Number}}">Note <span class="optional">optional</span></label>
+          <input id="label_{{.Number}}" name="label_{{.Number}}" value="{{.Label}}" maxlength="100" placeholder="e.g. Over the stage, left">
+        </div>
       </div>
     {{end}}
     <div class="form__actions">
-      <button type="submit" class="btn btn--primary">Save notes</button>
+      <button type="submit" class="btn btn--primary">Save</button>
       <a class="btn btn--ghost" href="/items/{{$i.ID}}">Cancel</a>
     </div>
   </form>

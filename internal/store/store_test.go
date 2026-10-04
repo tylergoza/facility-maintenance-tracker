@@ -259,6 +259,10 @@ func TestPlacesMigration(t *testing.T) {
 	if p, _ := s.GetProblem(1); p.Location() != "Sanctuary › 1st floor › 104 – Nursery" || p.WhatLabel() != "Lights #3 – By the door" {
 		t.Errorf("problem = %+v", p)
 	}
+	// Every unit has an ID, its number; notes are kept.
+	if units, _ := s.ItemUnits(1, 6, time.Now()); units[2].Tag != "3" || units[2].Label != "By the door" || units[5].Tag != "6" {
+		t.Errorf("units = %+v", units)
+	}
 	if p, _ := s.GetProblem(2); p.Location() != "Parsonage" {
 		t.Errorf("problem 2 = %+v", p)
 	}
@@ -280,7 +284,7 @@ func TestPlacesMigration(t *testing.T) {
 	// Foreign keys are back on: deleting an item still cascades.
 	must(t, s.DeleteItem(1))
 	var units int
-	s.DB.QueryRow(`SELECT COUNT(*) FROM item_units`).Scan(&units)
+	s.DB.QueryRow(`SELECT COUNT(*) FROM item_units WHERE item_id = 1`).Scan(&units)
 	if units != 0 {
 		t.Error("foreign keys should be on after the migration")
 	}
@@ -557,8 +561,10 @@ func TestMoveItem(t *testing.T) {
 	must(t, s.SaveItem(item, nil, 0))
 
 	// Moving to where it already is records nothing.
-	must(t, s.MoveItem(Move{ItemID: item.ID, PlaceID: r1.ID, MovedOn: "2026-01-01"}))
-	must(t, s.MoveItem(Move{ItemID: item.ID, PlaceID: r2.ID, MovedOn: "2026-01-02", Note: "For the retreat"}))
+	_, err := s.MoveItem(Move{ItemID: item.ID, PlaceID: r1.ID, MovedOn: "2026-01-01"})
+	must(t, err)
+	_, err = s.MoveItem(Move{ItemID: item.ID, PlaceID: r2.ID, MovedOn: "2026-01-02", Note: "For the retreat"})
+	must(t, err)
 	if got, _ := s.GetItem(item.ID); got.PlaceID != r2.ID {
 		t.Errorf("item in place %d, want %d", got.PlaceID, r2.ID)
 	}
@@ -570,8 +576,95 @@ func TestMoveItem(t *testing.T) {
 		t.Errorf("move log = %+v", l)
 	}
 	// A place that doesn't exist is refused.
-	if err := s.MoveItem(Move{ItemID: item.ID, PlaceID: 999, MovedOn: "2026-01-03"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.MoveItem(Move{ItemID: item.ID, PlaceID: 999, MovedOn: "2026-01-03"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestMoveSomeUnits: 5 of 10 chairs go to the gym and 2 come back.
+func TestMoveSomeUnits(t *testing.T) {
+	s := openTest(t)
+	b := building(t, s, "Main")
+	hall, gym := addPlace(t, s, b, KindRoom, "", "Hall"), addPlace(t, s, b, KindRoom, "", "Gym")
+	chairs := &Item{PlaceID: hall.ID, Name: "Chairs", Category: "Furniture", Quantity: 10, Portable: true}
+	must(t, s.SaveItem(chairs, nil, 0))
+	must(t, s.SaveTask(&Task{ItemID: chairs.ID, Name: "Wipe down", IntervalValue: 1, IntervalUnit: "months", NextDueOn: "2026-02-01", Active: true}))
+	must(t, s.SaveUnits(chairs.ID, []Unit{{Number: 2, Label: "By the door"}, {Number: 4, Label: "Back row"}, {Number: 9, Tag: "Spare"}}))
+	must(t, s.RecordMaintenance(Completion{ItemID: chairs.ID, PerformedOn: "2026-01-05", Notes: "Tightened", Units: []int{2, 4, 9}}))
+	p := &Problem{PlaceID: hall.ID, ItemID: chairs.ID, Title: "Wobbly"}
+	must(t, s.CreateProblem(p))
+	must(t, s.SetProblemUnit(p.ID, 9, 0))
+	q := &Problem{PlaceID: hall.ID, ItemID: chairs.ID, Title: "Torn seat"}
+	must(t, s.CreateProblem(q))
+	must(t, s.SetProblemUnit(q.ID, 4, 0))
+
+	// #3, #7 and #9 go: a new item in the gym takes them, with the task.
+	into, err := s.MoveItem(Move{ItemID: chairs.ID, PlaceID: gym.ID, Units: []int{9, 3, 7}, MovedOn: "2026-01-10"})
+	must(t, err)
+	if into == chairs.ID {
+		t.Fatal("a partial move should land in another item")
+	}
+	left, _ := s.GetItem(chairs.ID)
+	moved, _ := s.GetItem(into)
+	if left.Quantity != 7 || left.PlaceID != hall.ID || moved.Quantity != 3 || moved.PlaceID != gym.ID || moved.Category != "Furniture" || !moved.Portable {
+		t.Errorf("after split: left %+v, moved %+v", left, moved)
+	}
+	if ts, _ := s.ListTasks(TaskFilter{ItemID: into}); len(ts) != 1 || ts[0].Name != "Wipe down" || ts[0].NextDueOn != "2026-02-01" {
+		t.Errorf("moved tasks = %+v", ts)
+	}
+	// Those left close up from #1: old #4 is now #3, old #2 stays #2.
+	// Each keeps its ID: old #4 is now "#3 (ID 4)".
+	units, _ := s.ItemUnits(chairs.ID, left.Quantity, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
+	if len(units) != 7 || units[1].Name() != "#2 – By the door" || units[2].Name() != "#3 (ID 4) – Back row" || units[6].Name() != "#7 (ID 10)" {
+		t.Errorf("units left = %+v", units)
+	}
+	if units, _ := s.ItemUnits(into, 3, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); units[0].ID() != "3" || units[1].ID() != "7" || units[2].Name() != "#3 (ID Spare)" {
+		t.Errorf("units moved = %+v", units)
+	}
+	logs, _ := s.ListLogs(LogFilter{ItemID: chairs.ID})
+	if len(logs) != 2 || logs[1].UnitsLabel() != "#2, #3" {
+		t.Errorf("hall history = %+v", logs)
+	}
+	if logs[0].Notes != "Moved 3 of 10 from Main › Hall to Main › Gym: #3, #7, #9. The 7 left are now #1–#7, keeping their IDs." {
+		t.Errorf("hall move note = %q", logs[0].Notes)
+	}
+	if got, _ := s.GetProblem(q.ID); got.ItemID != chairs.ID || got.Unit != 3 {
+		t.Errorf("problem left behind = %+v", got)
+	}
+	if got, _ := s.GetProblem(p.ID); got.ItemID != into || got.Unit != 3 || got.PlaceID != gym.ID {
+		t.Errorf("problem that moved = %+v", got)
+	}
+
+	// Two coming back join the hall's chairs as #8 and #9.
+	back, err := s.MoveItem(Move{ItemID: into, PlaceID: hall.ID, Count: 2, MovedOn: "2026-01-12"})
+	must(t, err)
+	if back != chairs.ID {
+		t.Errorf("moving back landed in %d, want %d", back, chairs.ID)
+	}
+	if got, _ := s.GetItem(chairs.ID); got.Quantity != 9 {
+		t.Errorf("hall chairs = %d, want 9", got.Quantity)
+	}
+	if got, _ := s.GetItem(into); got.Quantity != 1 {
+		t.Errorf("gym chairs = %d, want 1", got.Quantity)
+	}
+	if units, _ := s.ItemUnits(chairs.ID, 9, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); units[7].ID() != "7" || units[8].ID() != "Spare" {
+		t.Errorf("units back in the hall = %+v", units)
+	}
+	if units, _ := s.ItemUnits(into, 1, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); units[0].ID() != "3" {
+		t.Errorf("unit left in the gym = %+v", units)
+	}
+	// IDs set from a list keep notes; the rest go back to their numbers.
+	must(t, s.SetUnitIDs(chairs.ID, 9, []string{"A", "", "B"}))
+	if units, _ := s.ItemUnits(chairs.ID, 9, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); units[0].Name() != "#1 (ID A)" ||
+		units[1].Name() != "#2 – By the door" || units[2].Name() != "#3 (ID B) – Back row" || units[8].Tagged() {
+		t.Errorf("units after SetUnitIDs = %+v", units)
+	}
+	if logs, _ := s.ListLogs(LogFilter{ItemID: chairs.ID}); logs[0].Notes != "Moved 2 from Main › Gym to Main › Hall. They were #2, #3 there and are #8–#9 here." {
+		t.Errorf("hall arrival note = %q", logs[0].Notes)
+	}
+	// Units must be ones it has.
+	if _, err := s.MoveItem(Move{ItemID: chairs.ID, PlaceID: gym.ID, Units: []int{12}, MovedOn: "2026-01-13"}); err == nil {
+		t.Error("moving unit #12 of 9 should fail")
 	}
 }
 

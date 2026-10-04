@@ -80,6 +80,9 @@ type itemForm struct {
 	NewSupplyName string
 	NewSupplyUnit string
 	NewSupplyQty  int
+	// UnitIDs lists each unit's ID in order, comma-separated; blanks are
+	// given one.
+	UnitIDs string
 }
 
 func (s *Server) renderItemForm(w http.ResponseWriter, r *http.Request, status int, title string, f itemForm, errs []string) {
@@ -135,6 +138,7 @@ func (s *Server) itemFromForm(r *http.Request, f *itemForm) []string {
 			f.Quantity = max(f.Quantity, 1)
 		}
 	}
+	f.UnitIDs = formStr(r, "unit_ids")
 	if f.InstallDate != "" && !validDate(f.InstallDate) {
 		errs = append(errs, "Install date is not a valid date.")
 	}
@@ -186,13 +190,25 @@ func (s *Server) handleItemNew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleItemCreate(w http.ResponseWriter, r *http.Request) {
 	var f itemForm
-	if errs := s.itemFromForm(r, &f); errs != nil {
+	errs := s.itemFromForm(r, &f)
+	idErrs, err := s.checkItemUnitIDs(&f, "")
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if errs = append(errs, idErrs...); errs != nil {
 		s.renderItemForm(w, r, http.StatusUnprocessableEntity, "Add item", f, errs)
 		return
 	}
 	if err := s.saveItem(r, &f); err != nil {
 		s.serverError(w, r, err)
 		return
+	}
+	if ids := parseUnitIDs(f.UnitIDs); ids != nil {
+		if err := s.store.SetUnitIDs(f.ID, f.Quantity, ids); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 	}
 	s.redirect(w, r, fmt.Sprintf("/items/%d", f.ID), f.Name+" added.")
 }
@@ -232,10 +248,19 @@ func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
 			done = append(done, t)
 		}
 	}
-	units, err := s.itemUnits(item)
+	units, err := s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
 	if err != nil {
 		s.serverError(w, r, err)
 		return
+	}
+	// A single item has no units table, so its ID goes with its details
+	// when it's one that moves or has been given its own.
+	var onlyID string
+	if item.Quantity == 1 {
+		if item.Portable || units[0].Tagged() {
+			onlyID = units[0].ID()
+		}
+		units = nil
 	}
 	tree, err := s.store.Places()
 	if err != nil {
@@ -245,7 +270,7 @@ func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
 	crumbs := append(tree.Ancestors(item.PlaceID), item.Place)
 	s.render(w, r, http.StatusOK, "items/show", map[string]any{
 		"Title": item.Name, "Item": item, "Crumbs": crumbs, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies, "Problems": problems,
-		"Units": units, "FrequentReplacements": store.FrequentReplacements,
+		"Units": units, "OnlyID": onlyID, "FrequentReplacements": store.FrequentReplacements,
 	})
 }
 
@@ -255,7 +280,12 @@ func (s *Server) handleItemEdit(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.renderItemForm(w, r, http.StatusOK, "Edit "+item.Name, itemForm{Item: *item}, nil)
+	ids, err := s.unitIDsField(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.renderItemForm(w, r, http.StatusOK, "Edit "+item.Name, itemForm{Item: *item, UnitIDs: ids}, nil)
 }
 
 func (s *Server) handleItemUpdate(w http.ResponseWriter, r *http.Request) {
@@ -264,19 +294,38 @@ func (s *Server) handleItemUpdate(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	was, err := s.unitIDsField(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	f := itemForm{Item: *item}
-	if errs := s.itemFromForm(r, &f); errs != nil {
+	errs := s.itemFromForm(r, &f)
+	idErrs, err := s.checkItemUnitIDs(&f, was)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if errs = append(errs, idErrs...); errs != nil {
 		s.renderItemForm(w, r, http.StatusUnprocessableEntity, "Edit item", f, errs)
 		return
 	}
 	// A new location is recorded in the item's history as a move.
-	if err := s.store.MoveItem(store.Move{ItemID: item.ID, PlaceID: f.PlaceID, MovedOn: s.today(), UserID: currentUser(r).ID}); err != nil {
+	if _, err := s.store.MoveItem(store.Move{ItemID: item.ID, PlaceID: f.PlaceID, MovedOn: s.today(), UserID: currentUser(r).ID}); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	if err := s.saveItem(r, &f); err != nil {
 		s.serverError(w, r, err)
 		return
+	}
+	// IDs are only rewritten when the list was changed; otherwise new
+	// units are given theirs as the item is saved.
+	if ids := parseUnitIDs(f.UnitIDs); !slices.Equal(ids, parseUnitIDs(was)) {
+		if err := s.store.SetUnitIDs(item.ID, f.Quantity, ids); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 	}
 	s.redirect(w, r, fmt.Sprintf("/items/%d", item.ID), "Item updated.")
 }
@@ -397,8 +446,13 @@ func (s *Server) renderMoveForm(w http.ResponseWriter, r *http.Request, status i
 		s.serverError(w, r, err)
 		return
 	}
+	units, err := s.itemUnits(item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	s.render(w, r, status, "items/move", map[string]any{
-		"Title": "Move " + item.Name, "Item": item, "Form": m, "Places": tree.All(), "Next": next, "Errors": errs,
+		"Title": "Move " + item.Name, "Item": item, "Form": m, "Places": tree.All(), "Units": units, "Next": next, "Errors": errs,
 	})
 }
 
@@ -408,7 +462,7 @@ func (s *Server) handleMoveForm(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.renderMoveForm(w, r, http.StatusOK, item, store.Move{PlaceID: item.PlaceID, MovedOn: s.today()}, r.URL.Query().Get("next"), nil)
+	s.renderMoveForm(w, r, http.StatusOK, item, store.Move{PlaceID: item.PlaceID, Count: item.Quantity, MovedOn: s.today()}, r.URL.Query().Get("next"), nil)
 }
 
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
@@ -418,7 +472,8 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := r.PostFormValue("next")
-	m := store.Move{ItemID: item.ID, PlaceID: formInt(r, "place_id"), MovedOn: formStr(r, "moved_on"), Note: formStr(r, "note"), UserID: currentUser(r).ID}
+	m := store.Move{ItemID: item.ID, PlaceID: formInt(r, "place_id"), MovedOn: formStr(r, "moved_on"), Note: formStr(r, "note"), UserID: currentUser(r).ID,
+		Units: formUnits(r, item.Quantity), Count: item.Quantity}
 	var errs []string
 	if _, err := s.store.GetPlace(m.PlaceID); err != nil {
 		errs = append(errs, "Choose where it's moving to.")
@@ -431,23 +486,38 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	if m.PlaceID == item.PlaceID {
 		errs = append(errs, "Choose where it's moving to; that's where it is now.")
 	}
+	// Ticked units say how many on their own; otherwise it's the count.
+	if len(m.Units) > 0 {
+		m.Count = len(m.Units)
+	} else if item.Quantity > 1 {
+		if m.Count, err = strconv.Atoi(formStr(r, "count")); err != nil || m.Count < 1 || m.Count > item.Quantity {
+			errs = append(errs, fmt.Sprintf("How many must be between 1 and %d.", item.Quantity))
+			m.Count = item.Quantity
+		}
+	}
 	if errs != nil {
 		s.renderMoveForm(w, r, http.StatusUnprocessableEntity, item, m, next, errs)
 		return
 	}
-	if err := s.store.MoveItem(m); err != nil {
+	into, err := s.store.MoveItem(m)
+	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	if next == "" {
 		next = fmt.Sprintf("/items/%d", item.ID)
 	}
-	moved, err := s.store.GetItem(item.ID)
+	moved, err := s.store.GetItem(into)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	s.redirect(w, r, safeRedirect(next), item.Name+" moved to "+moved.Location()+".")
+	if into == item.ID {
+		s.redirect(w, r, safeRedirect(next), item.Name+" moved to "+moved.Location()+".")
+		return
+	}
+	s.redirect(w, r, safeRedirect(next), fmt.Sprintf("Moved %d of %d %s to %s; %d left here.",
+		m.Count, item.Quantity, item.Name, moved.Location(), item.Quantity-m.Count))
 }
 
 // Units -------------------------------------------------------------------
@@ -473,6 +543,85 @@ func (s *Server) itemUnits(item *store.Item) ([]store.Unit, error) {
 	return s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
 }
 
+// parseUnitIDs splits "Mic 1, Mic 2" into IDs, dropping blanks at the
+// end; nil when there are none.
+func parseUnitIDs(v string) []string {
+	ids := strings.Split(v, ",")
+	for i := range ids {
+		ids[i] = strings.TrimSpace(ids[i])
+	}
+	for len(ids) > 0 && ids[len(ids)-1] == "" {
+		ids = ids[:len(ids)-1]
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+// checkUnitIDs reports problems with IDs for units #1..#quantity, in
+// order (blank to be given one). taken are those other items of the same
+// kind use; kind names them.
+func checkUnitIDs(ids []string, quantity int, kind string, taken map[string]bool) []string {
+	var errs []string
+	if len(ids) > quantity {
+		errs = append(errs, fmt.Sprintf("There are %d IDs listed for %d of them.", len(ids), quantity))
+	}
+	seen := map[string]bool{}
+	var dups, clash []string
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if msg := tooLong("Each ID", id, 40); msg != nil && !slices.Contains(errs, msg[0]) {
+			errs = append(errs, msg...)
+		}
+		low := strings.ToLower(id)
+		if seen[low] && !slices.Contains(dups, id) {
+			dups = append(dups, id)
+		}
+		if taken[low] && !slices.Contains(clash, id) {
+			clash = append(clash, id)
+		}
+		seen[low] = true
+	}
+	if dups != nil {
+		errs = append(errs, "Each one needs its own ID; more than one is "+strings.Join(dups, ", ")+".")
+	}
+	if clash != nil {
+		errs = append(errs, fmt.Sprintf("Other %s already use %s.", kind, strings.Join(clash, ", ")))
+	}
+	return errs
+}
+
+// checkItemUnitIDs checks the IDs on the item form against the others of
+// its kind. was is the list as the form showed it; left alone, it only
+// needs to cover however many there are now.
+func (s *Server) checkItemUnitIDs(f *itemForm, was string) ([]string, error) {
+	ids := parseUnitIDs(f.UnitIDs)
+	if slices.Equal(ids, parseUnitIDs(was)) && len(ids) > f.Quantity {
+		ids = ids[:f.Quantity]
+	}
+	taken, err := s.store.UnitIDsTaken(f.ID, f.Name, f.Portable)
+	if err != nil {
+		return nil, err
+	}
+	return checkUnitIDs(ids, f.Quantity, f.Name, taken), nil
+}
+
+// unitIDsField renders an item's unit IDs for the item form.
+func (s *Server) unitIDsField(item *store.Item) (string, error) {
+	units, err := s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
+	if err != nil {
+		return "", err
+	}
+	ids := make([]string, len(units))
+	for i, u := range units {
+		ids[i] = u.ID()
+	}
+	return strings.Join(ids, ", "), nil
+}
+
 func (s *Server) handleUnitsForm(w http.ResponseWriter, r *http.Request) {
 	item, err := s.store.GetItem(pathID(r))
 	if err != nil {
@@ -493,21 +642,35 @@ func (s *Server) handleUnitsSave(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	labels := map[int]string{}
-	for n := 1; n <= item.Quantity; n++ {
-		label := formStr(r, "label_"+strconv.Itoa(n))
-		if msg := tooLong("Location note", label, 100); msg != nil {
-			s.setFlash(w, r, "error", fmt.Sprintf("#%d: %s", n, msg[0]))
-			http.Redirect(w, r, fmt.Sprintf("/items/%d/units", item.ID), http.StatusSeeOther)
-			return
+	units := make([]store.Unit, item.Quantity)
+	ids := make([]string, item.Quantity)
+	var errs []string
+	for i := range units {
+		n := strconv.Itoa(i + 1)
+		units[i] = store.Unit{Number: i + 1, Tag: formStr(r, "id_"+n), Label: formStr(r, "label_"+n)}
+		ids[i] = units[i].Tag
+		if strings.Contains(units[i].Tag, ",") {
+			errs = append(errs, fmt.Sprintf("#%s: IDs can't contain commas.", n))
 		}
-		labels[n] = label
+		if msg := tooLong("Location note", units[i].Label, 100); msg != nil {
+			errs = append(errs, fmt.Sprintf("#%s: %s", n, msg[0]))
+		}
 	}
-	if err := s.store.SaveUnitLabels(item.ID, labels); err != nil {
+	taken, err := s.store.UnitIDsTaken(item.ID, item.Name, item.Portable)
+	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	s.redirect(w, r, fmt.Sprintf("/items/%d", item.ID), "Unit notes saved.")
+	if errs = append(errs, checkUnitIDs(ids, item.Quantity, item.Name, taken)...); errs != nil {
+		s.setFlash(w, r, "error", strings.Join(errs, " "))
+		http.Redirect(w, r, fmt.Sprintf("/items/%d/units", item.ID), http.StatusSeeOther)
+		return
+	}
+	if err := s.store.SaveUnits(item.ID, units); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.redirect(w, r, fmt.Sprintf("/items/%d", item.ID), "Unit IDs and notes saved.")
 }
 
 // resolveFromFix marks a problem resolved after work on its item was

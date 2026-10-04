@@ -3,6 +3,8 @@ package store
 import (
 	"cmp"
 	"database/sql"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -172,55 +174,273 @@ func (s *Store) SaveItem(i *Item, newSupply *Supply, userID int64) error {
 		serial_number = ?, install_date = ?, notes = ?, quantity = ?, supply_id = ?, supply_per = ?, portable = ? WHERE id = ?`, append(args, i.ID)...); err != nil {
 		return err
 	}
+	if err := fillUnitIDs(tx, i.ID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
-// Move is a request to move an item to another place.
+// Move is a request to move an item, or some of a group item, to another
+// place.
 type Move struct {
 	ItemID  int64
 	PlaceID int64
+	// Which of a group item's units are going, or how many when they
+	// aren't picked out (the highest-numbered go). Neither, or all of
+	// them, moves the whole item.
+	Units   []int
+	Count   int
 	MovedOn string
 	Note    string
 	UserID  int64
 }
 
 // MoveItem changes an item's place and records the move in its history.
-// Moving to where it already is records nothing.
-func (s *Store) MoveItem(m Move) error {
+// Moving to where it already is records nothing. It returns the item now
+// holding what moved.
+//
+// Moving only some of a group item splits it: the ones moving join a
+// matching item already at the new place (same name, make and supply), or
+// else become a new item there with copies of its active tasks. The ones
+// left behind are renumbered from #1 in order, and their location notes,
+// history and problems follow them; problems about the moved ones go with
+// them.
+func (s *Store) MoveItem(m Move) (int64, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	var from int64
-	if err := tx.QueryRow(`SELECT place_id FROM items WHERE id = ?`, m.ItemID).Scan(&from); err != nil {
-		return notFound(err)
+	var quantity int
+	if err := tx.QueryRow(`SELECT place_id, quantity FROM items WHERE id = ?`, m.ItemID).Scan(&from, &quantity); err != nil {
+		return 0, notFound(err)
 	}
 	if from == m.PlaceID {
-		return nil
+		return m.ItemID, nil
 	}
 	t, err := loadPlaces(tx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, ok := t.Get(m.PlaceID); !ok {
-		return ErrNotFound
+		return 0, ErrNotFound
 	}
-	if _, err := tx.Exec(`UPDATE items SET place_id = ? WHERE id = ?`, m.PlaceID, m.ItemID); err != nil {
-		return err
-	}
-	notes := "Moved from " + t.Path(from) + " to " + t.Path(m.PlaceID) + "."
-	if note := strings.TrimSpace(m.Note); note != "" {
-		notes += "\n" + note
+	moving, err := movingUnits(m, quantity)
+	if err != nil {
+		return 0, err
 	}
 	var by string
 	_ = tx.QueryRow(`SELECT COALESCE(NULLIF(display_name, ''), username) FROM users WHERE id = ?`, m.UserID).Scan(&by)
-	_, err = tx.Exec(`INSERT INTO maintenance_logs (item_id, kind, performed_on, performed_by, notes, created_by) VALUES (?, 'moved', ?, ?, ?, ?)`,
-		m.ItemID, m.MovedOn, by, notes, nullInt(m.UserID))
+	addLog := func(itemID int64, notes string) error {
+		if note := strings.TrimSpace(m.Note); note != "" {
+			notes += "\n" + note
+		}
+		_, err := tx.Exec(`INSERT INTO maintenance_logs (item_id, kind, performed_on, performed_by, notes, created_by) VALUES (?, 'moved', ?, ?, ?, ?)`,
+			itemID, m.MovedOn, by, notes, nullInt(m.UserID))
+		return err
+	}
+	fromPath, toPath := t.Path(from), t.Path(m.PlaceID)
+
+	if moving == nil {
+		if _, err := tx.Exec(`UPDATE items SET place_id = ? WHERE id = ?`, m.PlaceID, m.ItemID); err != nil {
+			return 0, err
+		}
+		if err := addLog(m.ItemID, "Moved from "+fromPath+" to "+toPath+"."); err != nil {
+			return 0, err
+		}
+		return m.ItemID, tx.Commit()
+	}
+
+	count, left := len(moving), quantity-len(moving)
+	into, base, err := splitInto(tx, m.ItemID, m.PlaceID, count)
+	if err != nil {
+		return 0, err
+	}
+	// New numbers: those left behind close up from #1, those moving
+	// follow on after whatever is already at the new place.
+	stay, gone := map[int]int{}, map[int]int{}
+	for n := 1; n <= quantity; n++ {
+		if i := slices.Index(moving, n); i >= 0 {
+			gone[n] = base + i + 1
+		} else {
+			stay[n] = len(stay) + 1
+		}
+	}
+	if err := renumberUnits(tx, m.ItemID, into, m.PlaceID, stay, gone); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE items SET quantity = ? WHERE id = ?`, left, m.ItemID); err != nil {
+		return 0, err
+	}
+
+	notes := fmt.Sprintf("Moved %d of %d from %s to %s: %s.", count, quantity, fromPath, toPath, UnitsLabel(moving))
+	if moving[0] <= left {
+		notes += fmt.Sprintf(" The %d left are now %s, keeping their IDs.", left, unitRange(1, left))
+	}
+	if err := addLog(m.ItemID, notes); err != nil {
+		return 0, err
+	}
+	notes = fmt.Sprintf("Moved %d from %s to %s. They were %s there and are %s here.", count, fromPath, toPath, UnitsLabel(moving), unitRange(base+1, base+count))
+	if err := addLog(into, notes); err != nil {
+		return 0, err
+	}
+	return into, tx.Commit()
+}
+
+// unitRef is a row (history entry, problem) that points at a unit.
+type unitRef struct {
+	id   int64
+	unit int
+}
+
+// unitRefs runs a query selecting (id, unit) pairs.
+func unitRefs(tx *sql.Tx, query string, args ...any) ([]unitRef, error) {
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []unitRef
+	for rows.Next() {
+		var r unitRef
+		if err := rows.Scan(&r.id, &r.unit); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// movingUnits returns which units of a group item a move takes, or nil
+// when it takes the whole item.
+func movingUnits(m Move, quantity int) ([]int, error) {
+	units := slices.Clone(m.Units)
+	slices.Sort(units)
+	units = slices.Compact(units)
+	if err := checkUnits(units, quantity); err != nil {
+		return nil, err
+	}
+	if len(units) == 0 && m.Count > 0 && m.Count < quantity {
+		for n := quantity - m.Count + 1; n <= quantity; n++ {
+			units = append(units, n)
+		}
+	}
+	if len(units) == 0 || len(units) >= quantity {
+		return nil, nil
+	}
+	return units, nil
+}
+
+// splitInto finds or makes the item at placeID that count of itemID are
+// joining, and returns it with how many it already had.
+func splitInto(tx *sql.Tx, itemID, placeID int64, count int) (into int64, base int, err error) {
+	err = tx.QueryRow(`
+		SELECT d.id, d.quantity FROM items i JOIN items d
+		  ON d.place_id = ? AND d.id != i.id AND d.name = i.name COLLATE NOCASE AND d.category = i.category COLLATE NOCASE
+		 AND d.manufacturer = i.manufacturer AND d.model = i.model AND d.serial_number = i.serial_number
+		 AND d.supply_id IS i.supply_id AND d.supply_per = i.supply_per AND d.portable = i.portable
+		WHERE i.id = ? ORDER BY d.id LIMIT 1`, placeID, itemID).Scan(&into, &base)
+	if err == nil {
+		_, err = tx.Exec(`UPDATE items SET quantity = quantity + ? WHERE id = ?`, count, into)
+		return into, base, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, err
+	}
+	res, err := tx.Exec(`
+		INSERT INTO items (place_id, name, category, manufacturer, model, serial_number, install_date, notes,
+		                   quantity, supply_id, supply_per, portable)
+		SELECT ?, name, category, manufacturer, model, serial_number, install_date, notes, ?, supply_id, supply_per, portable
+		FROM items WHERE id = ?`, placeID, count, itemID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if into, err = res.LastInsertId(); err != nil {
+		return 0, 0, err
+	}
+	_, err = tx.Exec(`
+		INSERT INTO tasks (item_id, name, description, interval_value, interval_unit, last_completed_on, next_due_on, active,
+		                   supply_id, supply_amount, supply_always)
+		SELECT ?, name, description, interval_value, interval_unit, last_completed_on, next_due_on, active,
+		       supply_id, supply_amount, supply_always
+		FROM tasks WHERE item_id = ? AND active = 1 ORDER BY id`, into, itemID)
+	return into, 0, err
+}
+
+// renumberUnits applies a split of itemID: units in stay keep their IDs,
+// location notes, history and problems under new numbers; units in gone
+// take their IDs and problems to the into item at placeID. A unit whose
+// ID was its number keeps that number as its ID wherever it ends up. The
+// notes of units that moved are dropped (they described where they were),
+// as are their marks on the old item's history.
+func renumberUnits(tx *sql.Tx, itemID, into, placeID int64, stay, gone map[int]int) error {
+	old := map[int]Unit{}
+	rows, err := tx.Query(`SELECT number, tag, label FROM item_units WHERE item_id = ?`, itemID)
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	for rows.Next() {
+		var u Unit
+		if err := rows.Scan(&u.Number, &u.Tag, &u.Label); err != nil {
+			rows.Close()
+			return err
+		}
+		old[u.Number] = u
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM item_units WHERE item_id = ?`, itemID); err != nil {
+		return err
+	}
+	for n := 1; n <= len(stay)+len(gone); n++ {
+		u := old[n]
+		u.Tag = unitID(n, u.Tag)
+		if to, ok := stay[n]; ok {
+			u.Number = to
+			err = saveUnit(tx, itemID, u)
+		} else {
+			u.Number, u.Label = gone[n], ""
+			err = saveUnit(tx, into, u)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	marks, err := unitRefs(tx, `SELECT u.log_id, u.unit FROM log_units u JOIN maintenance_logs l ON l.id = u.log_id WHERE l.item_id = ?`, itemID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM log_units WHERE log_id IN (SELECT id FROM maintenance_logs WHERE item_id = ?)`, itemID); err != nil {
+		return err
+	}
+	for _, u := range marks {
+		if n, ok := stay[u.unit]; ok {
+			if _, err := tx.Exec(`INSERT INTO log_units (log_id, unit) VALUES (?, ?)`, u.id, n); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Problems have no key on unit, so each can be updated in place.
+	problems, err := unitRefs(tx, `SELECT id, unit FROM problems WHERE item_id = ? AND unit IS NOT NULL`, itemID)
+	if err != nil {
+		return err
+	}
+	for _, p := range problems {
+		if n, ok := stay[p.unit]; ok {
+			_, err = tx.Exec(`UPDATE problems SET unit = ? WHERE id = ?`, n, p.id)
+		} else if n, ok := gone[p.unit]; ok {
+			_, err = tx.Exec(`UPDATE problems SET item_id = ?, unit = ?, place_id = ? WHERE id = ?`, into, n, placeID, p.id)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) DeleteItem(id int64) error {

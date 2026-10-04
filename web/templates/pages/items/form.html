@@ -20,6 +20,11 @@
       </div>
     </div>
     <p class="hint">Count identical things together, like 10 outlets or 15 lights. Give something its own item if you want to track it separately.</p>
+    <div class="field">
+      <label for="unit_ids">IDs <span class="optional">optional</span></label>
+      <input id="unit_ids" name="unit_ids" value="{{.Form.UnitIDs}}" placeholder="e.g. Mic 1, Mic 2">
+    </div>
+    <p class="hint">What's on each one's sticker, in order, separated by commas. Leave it blank and they're numbered 1, 2, 3…; a portable item carries on from others with the same name, so a second set of Lapel mics starts after the first. Each keeps its ID wherever it moves.</p>
     {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Where" "Required" true "Blank" "Choose…")}}
     <label class="check">
       <input type="checkbox" name="portable" value="1" {{if .Form.Portable}}checked{{end}}>

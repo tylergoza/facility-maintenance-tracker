@@ -3,16 +3,24 @@
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{$i.ID}}">{{$i.Name}}</a></nav>
 <div class="page-head">
   <div>
-    <h1>Move {{$i.Name}}</h1>
+    <h1>Move {{$i.Name}}{{if gt $i.Quantity 1}} <span class="muted">× {{$i.Quantity}}</span>{{end}}</h1>
     <p class="muted">Now in {{$i.Location}}</p>
   </div>
 </div>
 <div class="card narrow">
   {{template "errors" .Errors}}
-  <form method="post" action="/items/{{$i.ID}}/move" class="form" data-controller="place-picker">
+  <form method="post" action="/items/{{$i.ID}}/move" class="form" data-controller="place-picker unit-count" data-unit-count-per-value="1">
     {{template "csrf" .CSRF}}
     <input type="hidden" name="next" value="{{.Next}}">
     {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Moving to" "Required" true)}}
+    {{if gt $i.Quantity 1}}
+      {{template "unit-picker" (dict "Units" .Units "Selected" .Form.Units)}}
+      <div class="field field--narrow">
+        <label for="count">How many</label>
+        <input id="count" name="count" type="number" min="1" max="{{$i.Quantity}}" step="1" inputmode="numeric" value="{{.Form.Count}}" required data-unit-count-target="amount">
+        <p class="hint">Leave at {{$i.Quantity}} to move them all. Moving fewer leaves the rest here, renumbered from #1; with none ticked, the highest-numbered go.</p>
+      </div>
+    {{end}}
     <div class="field field--narrow">
       <label for="moved_on">Date moved</label>
       <input id="moved_on" name="moved_on" type="date" value="{{.Form.MovedOn}}" max="{{today}}" required>

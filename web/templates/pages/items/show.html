@@ -17,9 +17,10 @@
   </div>
 </div>
 
-{{if or $i.Manufacturer $i.Model $i.SerialNumber $i.InstallDate $i.Notes $i.SupplyID (gt $i.Quantity 1)}}
+{{if or .OnlyID $i.Manufacturer $i.Model $i.SerialNumber $i.InstallDate $i.Notes $i.SupplyID (gt $i.Quantity 1)}}
 <div class="card">
   <dl class="details">
+    {{with .OnlyID}}<div><dt>ID</dt><dd>{{.}}</dd></div>{{end}}
     {{if gt $i.Quantity 1}}<div><dt>How many</dt><dd>{{$i.Quantity}}</dd></div>{{end}}
     {{if $i.SupplyID}}
       <div><dt>Uses</dt><dd>{{$i.SupplyPer}} × <a href="/supplies/{{$i.SupplyID}}">{{$i.Supply.Name}}</a> each{{if gt $i.Quantity 1}}<div class="muted small">{{$i.SupplyTotal}} to replace them all</div>{{end}}</dd></div>
@@ -39,16 +40,16 @@
 <section class="section">
   <div class="section__head">
     <h2 class="section__title">Units <span class="count">{{len .Units}}</span></h2>
-    <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/units">Location notes</a>
+    <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/units">IDs and notes</a>
   </div>
-  <p class="muted small">Number each one #1–#{{len .Units}} with a sticker or label so you can record which ones were worked on.{{if $i.SupplyID}} Any replaced {{.FrequentReplacements}} or more times in a year is flagged.{{end}}</p>
+  <p class="muted small">Number each one #1–#{{len .Units}} with a sticker or label so you can record which ones were worked on. Give them IDs instead (Mic 1, Mic 2) and each keeps its ID when some move.{{if $i.SupplyID}} Any replaced {{.FrequentReplacements}} or more times in a year is flagged.{{end}}</p>
   <div class="table-wrap">
     <table class="table table--stack">
       <thead><tr><th>Unit</th>{{if $i.SupplyID}}<th>Last replaced</th><th class="num">Past year</th>{{end}}</tr></thead>
       <tbody>
         {{range .Units}}
           <tr>
-            <td data-label="Unit"><div><strong>#{{.Number}}</strong>{{if .Label}} <span class="muted">– {{.Label}}</span>{{end}}</div></td>
+            <td data-label="Unit"><div><strong>#{{.Number}}</strong>{{if .Tagged}} <span class="badge">ID {{.Tag}}</span>{{end}}{{if .Label}} <span class="muted">– {{.Label}}</span>{{end}}</div></td>
             {{if $i.SupplyID}}
               <td data-label="Last replaced">{{if .LastReplaced}}<span class="small">{{fmtDate .LastReplaced}}</span>{{else}}<span class="muted small">Never recorded</span>{{end}}</td>
               <td data-label="Past year" class="num">{{if .Frequent}}<span class="badge badge--due-soon">{{.RecentCount}} times: check why</span>{{else}}{{.RecentCount}}{{end}}</td>

@@ -721,6 +721,114 @@ func TestUnits(t *testing.T) {
 	}
 }
 
+func TestMoveSome(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	addPlaces(c, "building:Main", "room:2::Hall", "room:2::Gym") // places 2, 3, 4
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Chairs"}, "quantity": {"10"}, "portable": {"1"}}, 200)
+
+	body := c.get("/items/1/move", 200)
+	if !strings.Contains(body, `name="units" value="10"`) || !strings.Contains(body, `name="count" type="number" min="1" max="10" step="1" inputmode="numeric" value="10"`) {
+		t.Error("move form should offer the unit picker and default to all of them")
+	}
+	if body := c.post("/items/1/move", "/items/1/move", url.Values{"place_id": {"4"}, "moved_on": {"2026-03-01"}, "count": {"11"}}, 422); !strings.Contains(body, "How many must be between 1 and 10.") {
+		t.Error("moving more than there are should be refused")
+	}
+	body = c.post("/items/1/move", "/items/1/move", url.Values{"place_id": {"4"}, "moved_on": {"2026-03-01"}, "count": {"10"}, "units": {"2", "5"}}, 200)
+	if !strings.Contains(body, "Moved 2 of 10 Chairs to Main › Gym; 8 left here.") || !strings.Contains(body, "Moved 2 of 10 from Main › Hall to Main › Gym: #2, #5.") {
+		t.Error("ticked units should be moved, flashed and recorded")
+	}
+	if hall, _ := st.GetItem(1); hall.Quantity != 8 || hall.PlaceID != 3 {
+		t.Errorf("chairs left = %+v", hall)
+	}
+	if gym, _ := st.GetItem(2); gym.Quantity != 2 || gym.PlaceID != 4 || gym.Name != "Chairs" {
+		t.Errorf("chairs moved = %+v", gym)
+	}
+	// Moving them all moves the whole item.
+	c.post("/items/2/move", "/items/2/move", url.Values{"place_id": {"3"}, "moved_on": {"2026-03-02"}, "count": {"2"}}, 200)
+	if gym, _ := st.GetItem(2); gym.PlaceID != 3 || gym.Quantity != 2 {
+		t.Errorf("whole move = %+v", gym)
+	}
+	// Those left behind keep their numbers as IDs.
+	if body := c.get("/items/1", 200); !strings.Contains(body, `<strong>#2</strong> <span class="badge">ID 3</span>`) {
+		t.Error("renumbered units should show the ID they had")
+	}
+}
+
+func TestUnitIDs(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	addPlaces(c, "building:Main", "room:2::Hall", "room:2::Gym") // places 2, 3, 4
+	mics := url.Values{"place_id": {"3"}, "name": {"Mics"}, "quantity": {"2"}, "portable": {"1"}}
+
+	// IDs given when it's added; they must be one each and no more than there are.
+	mics.Set("unit_ids", "Mic 1, mic 1")
+	if body := c.post("/items/new", "/items", mics, 422); !strings.Contains(body, "Each one needs its own ID; more than one is mic 1.") {
+		t.Error("duplicate IDs should be refused")
+	}
+	mics.Set("unit_ids", "A, B, C")
+	if body := c.post("/items/new", "/items", mics, 422); !strings.Contains(body, "There are 3 IDs listed for 2 of them.") {
+		t.Error("too many IDs should be refused")
+	}
+	mics.Set("unit_ids", "Mic 1, Mic 2")
+	c.post("/items/new", "/items", mics, 200)
+	if body := c.get("/items/1/move", 200); !strings.Contains(body, "#1 (ID Mic 1)") {
+		t.Error("move form should show IDs")
+	}
+
+	// Mic 1 goes to the gym; Mic 2 is still Mic 2, now as #1 in the hall.
+	c.post("/items/1/move", "/items/1/move", url.Values{"place_id": {"4"}, "moved_on": {"2026-03-01"}, "count": {"2"}, "units": {"1"}}, 200)
+	if body := c.get("/items/1", 200); !strings.Contains(body, "<dt>ID</dt><dd>Mic 2</dd>") {
+		t.Error("the mic left behind should still be Mic 2")
+	}
+	if body := c.get("/items/2", 200); !strings.Contains(body, "<dt>ID</dt><dd>Mic 1</dd>") {
+		t.Error("the mic that moved should still be Mic 1")
+	}
+	if !strings.Contains(c.get("/items/2/edit", 200), `name="unit_ids" value="Mic 1"`) {
+		t.Error("edit form should list the IDs")
+	}
+
+	// IDs are per kind: handheld mics have their own 1.
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Handheld mics"}, "quantity": {"1"}, "portable": {"1"}}, 200)
+	if body := c.get("/items/3", 200); !strings.Contains(body, "<dt>ID</dt><dd>1</dd>") {
+		t.Error("a single portable item should show its ID")
+	}
+	// A second set of lapel mics carries on from the first.
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Lapel mics"}, "quantity": {"2"}, "portable": {"1"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"4"}, "name": {"lapel mics"}, "quantity": {"2"}, "portable": {"1"}}, 200)
+	if units, _ := st.ItemUnits(5, 2, mustDate(t, "2026-03-01")); units[0].ID() != "3" || units[1].Name() != "#2 (ID 4)" {
+		t.Errorf("second set of lapel mics = %+v", units)
+	}
+	if body := c.post("/items/new", "/items", url.Values{"place_id": {"4"}, "name": {"Lapel mics"}, "quantity": {"1"}, "portable": {"1"}, "unit_ids": {"4"}}, 422); !strings.Contains(body, "Other Lapel mics already use 4.") {
+		t.Error("an ID another of its kind has should be refused")
+	}
+	// Adding more gives the new ones the next IDs; fewer drops the last.
+	c.post("/items/5/edit", "/items/5", url.Values{"place_id": {"4"}, "name": {"lapel mics"}, "quantity": {"3"}, "portable": {"1"}, "unit_ids": {"3, 4"}}, 200)
+	if units, _ := st.ItemUnits(5, 3, mustDate(t, "2026-03-01")); units[2].ID() != "5" {
+		t.Errorf("added lapel mic = %+v", units)
+	}
+	c.post("/items/5/edit", "/items/5", url.Values{"place_id": {"4"}, "name": {"lapel mics"}, "quantity": {"1"}, "portable": {"1"}, "unit_ids": {"3, 4, 5"}}, 200)
+	if units, _ := st.ItemUnits(5, 1, mustDate(t, "2026-03-01")); units[0].ID() != "3" {
+		t.Errorf("lapel mic left = %+v", units)
+	}
+
+	// Changed later on the units page; a blank one is given the next free number.
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Stands"}, "quantity": {"3"}}, 200)
+	if body := c.post("/items/6/units", "/items/6/units", url.Values{"id_1": {"S1"}, "id_2": {"s1"}}, 200); !strings.Contains(body, "more than one is s1.") {
+		t.Error("the same ID twice should be refused")
+	}
+	c.post("/items/6/units", "/items/6/units", url.Values{"id_1": {"S1"}, "id_3": {"3"}, "label_3": {"By the piano"}}, 200)
+	units, _ := st.ItemUnits(6, 3, mustDate(t, "2026-03-01"))
+	if units[0].Name() != "#1 (ID S1)" || units[1].Name() != "#2" || units[2].Name() != "#3 – By the piano" {
+		t.Errorf("units = %+v", units)
+	}
+	// Editing the item without touching the IDs leaves them alone.
+	c.post("/items/6/edit", "/items/6", url.Values{"place_id": {"3"}, "name": {"Stands"}, "quantity": {"3"}, "unit_ids": {"S1, 2, 3"}}, 200)
+	if units, _ := st.ItemUnits(6, 3, mustDate(t, "2026-03-01")); units[0].ID() != "S1" || units[2].Label != "By the piano" {
+		t.Errorf("units after edit = %+v", units)
+	}
+}
+
 // addPlaces adds places through the form, in order. Each is
 // "kind:parent:number:name", or "building:Name" for a building on the site.
 func addPlaces(c *client, specs ...string) {

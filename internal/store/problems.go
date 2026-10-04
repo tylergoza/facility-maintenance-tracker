@@ -44,6 +44,7 @@ type Problem struct {
 	ItemName        string
 	ItemQuantity    int
 	Unit            int // which of the item's units, once known; 0 = not set
+	UnitTag         string
 	UnitLabel       string
 	Title           string
 	Details         string
@@ -65,13 +66,13 @@ func (p Problem) UnitName() string {
 	if p.Unit == 0 {
 		return ""
 	}
-	return UnitName(p.Unit, p.UnitLabel)
+	return UnitName(p.Unit, p.UnitTag, p.UnitLabel)
 }
 
 // WhatLabel renders "Lights #7", "Lights" or "" for lists.
 func (p Problem) WhatLabel() string {
 	if p.Unit != 0 {
-		return p.ItemName + " " + UnitName(p.Unit, p.UnitLabel)
+		return p.ItemName + " " + UnitName(p.Unit, p.UnitTag, p.UnitLabel)
 	}
 	return p.ItemName
 }
@@ -92,7 +93,7 @@ type ProblemFilter struct {
 
 const problemSelect = `
 	SELECT p.id, p.place_id,
-	       COALESCE(p.item_id, 0), COALESCE(i.name, ''), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(iu.label, ''),
+	       COALESCE(p.item_id, 0), COALESCE(i.name, ''), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(iu.tag, ''), COALESCE(iu.label, ''),
 	       p.title, p.details, p.status,
 	       COALESCE(p.assigned_to, 0), COALESCE(NULLIF(a.display_name, ''), a.username, ''),
 	       COALESCE(p.reported_by, 0), p.reporter_name, p.reporter_contact,
@@ -109,7 +110,7 @@ func (s *Store) scanProblems(rows *sql.Rows) ([]Problem, error) {
 	for rows.Next() {
 		var p Problem
 		if err := rows.Scan(&p.ID, &p.PlaceID,
-			&p.ItemID, &p.ItemName, &p.ItemQuantity, &p.Unit, &p.UnitLabel, &p.Title, &p.Details, &p.Status,
+			&p.ItemID, &p.ItemName, &p.ItemQuantity, &p.Unit, &p.UnitTag, &p.UnitLabel, &p.Title, &p.Details, &p.Status,
 			&p.AssignedTo, &p.AssignedName, &p.ReportedBy, &p.ReporterName, &p.ReporterContact,
 			&p.CreatedAt, &p.UpdatedAt, &p.ResolvedAt); err != nil {
 			return nil, err
@@ -235,9 +236,9 @@ func (s *Store) SetProblemUnit(problemID int64, unit int, userID int64) error {
 	}
 	note := "Not sure which one after all."
 	if unit != 0 {
-		var label string
-		_ = tx.QueryRow(`SELECT label FROM item_units WHERE item_id = ? AND number = ?`, itemID, unit).Scan(&label)
-		note = "It's " + UnitName(unit, label) + "."
+		var tag, label string
+		_ = tx.QueryRow(`SELECT tag, label FROM item_units WHERE item_id = ? AND number = ?`, itemID, unit).Scan(&tag, &label)
+		note = "It's " + UnitName(unit, tag, label) + "."
 	}
 	if _, err := tx.Exec(`INSERT INTO problem_updates (problem_id, note, created_by) VALUES (?, ?, ?)`, problemID, note, nullInt(userID)); err != nil {
 		return err
