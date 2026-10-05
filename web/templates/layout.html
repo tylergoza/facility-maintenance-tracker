@@ -36,12 +36,15 @@
         {{if .User}}
           <a href="/places" {{if eq .Path "/places"}}aria-current="page"{{end}}>Places</a>
           <a href="/items" {{if eq .Path "/items"}}aria-current="page"{{end}}>Items</a>
+          <a href="/products" {{if eq .Path "/products"}}aria-current="page"{{end}}>Products</a>
           <a href="/supplies" {{if eq .Path "/supplies"}}aria-current="page"{{end}}>Supplies</a>
           <a href="/problems" {{if eq .Path "/problems"}}aria-current="page"{{end}}>Problems</a>
           <a href="/history" {{if eq .Path "/history"}}aria-current="page"{{end}}>History</a>
+          <a href="/scan" {{if eq .Path "/scan"}}aria-current="page"{{end}}>Scan</a>
           {{if .User.IsAdmin}}
             <a href="/admin/users" {{if eq .Path "/admin/users"}}aria-current="page"{{end}}>Users</a>
             <a href="/admin/settings" {{if eq .Path "/admin/settings"}}aria-current="page"{{end}}>Settings</a>
+            <a href="/admin/tokens" {{if eq .Path "/admin/tokens"}}aria-current="page"{{end}}>API</a>
           {{end}}
         {{else if .PublicReports}}
           <a href="/report" {{if eq .Path "/report"}}aria-current="page"{{end}}>Report a problem</a>

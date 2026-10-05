@@ -10,11 +10,16 @@ import (
 )
 
 type Item struct {
-	ID           int64
-	PlaceID      int64
-	Place        Place // where it is, with its path
+	ID      int64
+	PlaceID int64
+	Place   Place // where it is, with its path
+	// What it is. Name, Category and Counted come from its product; when
+	// saving, Name picks the product (adding one with Category and
+	// Counted if there's none by that name).
+	ProductID    int64
 	Name         string
 	Category     string
+	Counted      bool
 	Manufacturer string
 	Model        string
 	SerialNumber string
@@ -35,6 +40,10 @@ type Item struct {
 	LastReplaced string
 }
 
+// HasUnits reports whether it has numbered units to pick from: there's
+// more than one and its product isn't only counted.
+func (i Item) HasUnits() bool { return !i.Counted && i.Quantity > 1 }
+
 // SupplyTotal is how many of the supply it takes to replace every one.
 func (i Item) SupplyTotal() int { return i.Quantity * i.SupplyPer }
 
@@ -47,20 +56,23 @@ func (i Item) Location() string { return i.Place.Path }
 // Items ------------------------------------------------------------------
 
 type ItemFilter struct {
-	PlaceID  int64 // in this place or anywhere inside it
-	Direct   bool  // only items in PlaceID itself
-	Tag      string
-	SupplyID int64
-	Query    string
+	PlaceID      int64 // in this place or anywhere inside it
+	Direct       bool  // only items in PlaceID itself
+	Tag          string
+	SupplyID     int64
+	ProductID    int64
+	PortableOnly bool
+	Query        string
 }
 
 const itemSelect = `
-	SELECT i.id, i.place_id, i.name, i.category, i.manufacturer, i.model, i.serial_number,
+	SELECT i.id, i.place_id, i.product_id, p.name, p.category, p.counted, i.manufacturer, i.model, i.serial_number,
 	       COALESCE(i.install_date, ''), i.notes, i.quantity, COALESCE(i.supply_id, 0), i.supply_per, i.portable,
 	       COALESCE(s.name, ''), COALESCE(s.unit, ''), COALESCE(s.quantity, 0), COALESCE(s.reorder_at, 0), COALESCE(s.place_id, 0),
 	       COALESCE((SELECT MIN(t.next_due_on) FROM tasks t WHERE t.item_id = i.id AND t.active = 1), ''),
 	       COALESCE((SELECT MAX(l.performed_on) FROM maintenance_logs l WHERE l.item_id = i.id AND l.replaced IS NOT NULL), '')
 	FROM items i
+	JOIN products p ON p.id = i.product_id
 	LEFT JOIN supplies s ON s.id = i.supply_id`
 
 // scanItems reads items and fills in where they and their supplies are,
@@ -70,7 +82,7 @@ func (s *Store) scanItems(rows *sql.Rows) ([]Item, error) {
 	var out []Item
 	for rows.Next() {
 		var i Item
-		if err := rows.Scan(&i.ID, &i.PlaceID, &i.Name, &i.Category, &i.Manufacturer, &i.Model, &i.SerialNumber, &i.InstallDate, &i.Notes,
+		if err := rows.Scan(&i.ID, &i.PlaceID, &i.ProductID, &i.Name, &i.Category, &i.Counted, &i.Manufacturer, &i.Model, &i.SerialNumber, &i.InstallDate, &i.Notes,
 			&i.Quantity, &i.SupplyID, &i.SupplyPer, &i.Portable,
 			&i.Supply.Name, &i.Supply.Unit, &i.Supply.Quantity, &i.Supply.ReorderAt, &i.Supply.PlaceID, &i.NextDue, &i.LastReplaced); err != nil {
 			return nil, err
@@ -104,9 +116,16 @@ func (s *Store) ListItems(f ItemFilter) ([]Item, error) {
 		q += ` AND i.supply_id = ?`
 		args = append(args, f.SupplyID)
 	}
+	if f.ProductID != 0 {
+		q += ` AND i.product_id = ?`
+		args = append(args, f.ProductID)
+	}
+	if f.PortableOnly {
+		q += ` AND i.portable = 1`
+	}
 	if f.Query != "" {
 		like := "%" + f.Query + "%"
-		q += ` AND (i.name LIKE ? OR i.category LIKE ? OR i.manufacturer LIKE ? OR i.model LIKE ? OR i.serial_number LIKE ?)`
+		q += ` AND (p.name LIKE ? OR p.category LIKE ? OR i.manufacturer LIKE ? OR i.model LIKE ? OR i.serial_number LIKE ?)`
 		args = append(args, like, like, like, like, like)
 	}
 	rows, err := s.DB.Query(q, args...)
@@ -131,18 +150,24 @@ func (s *Store) GetItem(id int64) (*Item, error) {
 	return &is[0], nil
 }
 
-// SaveItem creates or updates an item's details. When newSupply is given
+// SaveItem creates or updates an item's details. Its name picks its
+// product, which is added if there's none by that name yet; a product no
+// item is left in is removed. When newSupply is given
 // it is added to supplies first (in the item's building) and becomes the
 // supply the item uses, in the same transaction. Location changes on an
 // existing item should go through MoveItem so they're recorded.
 func (s *Store) SaveItem(i *Item, newSupply *Supply, userID int64) error {
-	i.Name, i.Category = strings.TrimSpace(i.Name), strings.TrimSpace(i.Category)
 	i.Quantity, i.SupplyPer = max(i.Quantity, 1), max(i.SupplyPer, 1)
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	p, err := productFor(tx, i.Name, i.Category, i.Counted)
+	if err != nil {
+		return err
+	}
+	i.ProductID, i.Name, i.Category, i.Counted = p.ID, p.Name, p.Category, p.Counted
 	if newSupply != nil {
 		t, err := loadPlaces(tx)
 		if err != nil {
@@ -159,22 +184,25 @@ func (s *Store) SaveItem(i *Item, newSupply *Supply, userID int64) error {
 		}
 		i.SupplyID = newSupply.ID
 	}
-	args := []any{i.PlaceID, i.Name, i.Category, i.Manufacturer, i.Model, i.SerialNumber, nullStr(i.InstallDate), i.Notes,
+	args := []any{i.PlaceID, i.ProductID, i.Manufacturer, i.Model, i.SerialNumber, nullStr(i.InstallDate), i.Notes,
 		i.Quantity, nullInt(i.SupplyID), i.SupplyPer, i.Portable}
 	if i.ID == 0 {
-		res, err := tx.Exec(`INSERT INTO items (place_id, name, category, manufacturer, model, serial_number, install_date, notes,
-			quantity, supply_id, supply_per, portable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...)
+		res, err := tx.Exec(`INSERT INTO items (place_id, product_id, manufacturer, model, serial_number, install_date, notes,
+			quantity, supply_id, supply_per, portable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...)
 		if err != nil {
 			return err
 		}
 		if i.ID, err = res.LastInsertId(); err != nil {
 			return err
 		}
-	} else if _, err := tx.Exec(`UPDATE items SET place_id = ?, name = ?, category = ?, manufacturer = ?, model = ?,
+	} else if _, err := tx.Exec(`UPDATE items SET place_id = ?, product_id = ?, manufacturer = ?, model = ?,
 		serial_number = ?, install_date = ?, notes = ?, quantity = ?, supply_id = ?, supply_per = ?, portable = ? WHERE id = ?`, append(args, i.ID)...); err != nil {
 		return err
 	}
-	if err := fillUnitIDs(tx, i.ID); err != nil {
+	if err := refreshUnits(tx, `id = ?`, i.ID); err != nil {
+		return err
+	}
+	if err := dropEmptyProducts(tx); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -200,7 +228,7 @@ type Move struct {
 // holding what moved.
 //
 // Moving only some of a group item splits it: the ones moving join a
-// matching item already at the new place (same name, make and supply), or
+// matching item already at the new place (same product, make and supply), or
 // else become a new item there with copies of its active tasks. The ones
 // left behind are renumbered from #1 in order, and their location notes,
 // history and problems follow them; problems about the moved ones go with
@@ -213,8 +241,13 @@ func (s *Store) MoveItem(m Move) (int64, error) {
 	defer tx.Rollback()
 	var from int64
 	var quantity int
-	if err := tx.QueryRow(`SELECT place_id, quantity FROM items WHERE id = ?`, m.ItemID).Scan(&from, &quantity); err != nil {
+	var counted bool
+	if err := tx.QueryRow(`SELECT i.place_id, i.quantity, p.counted FROM items i JOIN products p ON p.id = i.product_id WHERE i.id = ?`, m.ItemID).
+		Scan(&from, &quantity, &counted); err != nil {
 		return 0, notFound(err)
+	}
+	if counted {
+		m.Units = nil // a count of them, not which ones
 	}
 	if from == m.PlaceID {
 		return m.ItemID, nil
@@ -267,21 +300,31 @@ func (s *Store) MoveItem(m Move) (int64, error) {
 			stay[n] = len(stay) + 1
 		}
 	}
-	if err := renumberUnits(tx, m.ItemID, into, m.PlaceID, stay, gone); err != nil {
-		return 0, err
+	if !counted {
+		if err := renumberUnits(tx, m.ItemID, into, m.PlaceID, stay, gone); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE items SET quantity = ? WHERE id = ?`, left, m.ItemID); err != nil {
 		return 0, err
 	}
 
-	notes := fmt.Sprintf("Moved %d of %d from %s to %s: %s.", count, quantity, fromPath, toPath, UnitsLabel(moving))
-	if moving[0] <= left {
-		notes += fmt.Sprintf(" The %d left are now %s, keeping their IDs.", left, unitRange(1, left))
+	notes := fmt.Sprintf("Moved %d of %d from %s to %s", count, quantity, fromPath, toPath)
+	if counted {
+		notes += "."
+	} else {
+		notes += ": " + UnitsLabel(moving) + "."
+		if moving[0] <= left {
+			notes += fmt.Sprintf(" The %d left are now %s, keeping their IDs.", left, unitRange(1, left))
+		}
 	}
 	if err := addLog(m.ItemID, notes); err != nil {
 		return 0, err
 	}
-	notes = fmt.Sprintf("Moved %d from %s to %s. They were %s there and are %s here.", count, fromPath, toPath, UnitsLabel(moving), unitRange(base+1, base+count))
+	notes = fmt.Sprintf("Moved %d from %s to %s.", count, fromPath, toPath)
+	if !counted {
+		notes += fmt.Sprintf(" They were %s there and are %s here.", UnitsLabel(moving), unitRange(base+1, base+count))
+	}
 	if err := addLog(into, notes); err != nil {
 		return 0, err
 	}
@@ -337,7 +380,7 @@ func movingUnits(m Move, quantity int) ([]int, error) {
 func splitInto(tx *sql.Tx, itemID, placeID int64, count int) (into int64, base int, err error) {
 	err = tx.QueryRow(`
 		SELECT d.id, d.quantity FROM items i JOIN items d
-		  ON d.place_id = ? AND d.id != i.id AND d.name = i.name COLLATE NOCASE AND d.category = i.category COLLATE NOCASE
+		  ON d.place_id = ? AND d.id != i.id AND d.product_id = i.product_id
 		 AND d.manufacturer = i.manufacturer AND d.model = i.model AND d.serial_number = i.serial_number
 		 AND d.supply_id IS i.supply_id AND d.supply_per = i.supply_per AND d.portable = i.portable
 		WHERE i.id = ? ORDER BY d.id LIMIT 1`, placeID, itemID).Scan(&into, &base)
@@ -349,9 +392,9 @@ func splitInto(tx *sql.Tx, itemID, placeID int64, count int) (into int64, base i
 		return 0, 0, err
 	}
 	res, err := tx.Exec(`
-		INSERT INTO items (place_id, name, category, manufacturer, model, serial_number, install_date, notes,
+		INSERT INTO items (place_id, product_id, manufacturer, model, serial_number, install_date, notes,
 		                   quantity, supply_id, supply_per, portable)
-		SELECT ?, name, category, manufacturer, model, serial_number, install_date, notes, ?, supply_id, supply_per, portable
+		SELECT ?, product_id, manufacturer, model, serial_number, install_date, notes, ?, supply_id, supply_per, portable
 		FROM items WHERE id = ?`, placeID, count, itemID)
 	if err != nil {
 		return 0, 0, err
@@ -443,14 +486,25 @@ func renumberUnits(tx *sql.Tx, itemID, into, placeID int64, stay, gone map[int]i
 	return nil
 }
 
+// DeleteItem removes an item, and its product if it was the last of it.
 func (s *Store) DeleteItem(id int64) error {
-	_, err := s.DB.Exec(`DELETE FROM items WHERE id = ?`, id)
-	return err
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM items WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if err := dropEmptyProducts(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// Categories returns distinct item categories for form autocompletion.
+// Categories returns distinct product categories for form autocompletion.
 func (s *Store) Categories() ([]string, error) {
-	rows, err := s.DB.Query(`SELECT DISTINCT category FROM items WHERE category != '' ORDER BY category COLLATE NOCASE`)
+	rows, err := s.DB.Query(`SELECT DISTINCT category FROM products WHERE category != '' ORDER BY category COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
 	}

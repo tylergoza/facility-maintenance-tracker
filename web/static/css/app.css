@@ -78,6 +78,7 @@ h2 { font-size: 1.2rem; }
 h3 { font-size: 1.05rem; }
 p { margin: 0 0 .75em; }
 code { font-size: .9em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+code.token { display: inline-block; word-break: break-all; user-select: all; padding: 6px 8px; }
 
 [hidden] { display: none !important; }
 
@@ -485,6 +486,18 @@ a.chip:hover { border-color: var(--primary); }
 .unit-chip:has(input:checked) { border-color: var(--primary); background: var(--surface-2); font-weight: 700; }
 .unit-chip input { accent-color: var(--primary); }
 
+/* Scanning QR codes with the camera */
+.scan { text-align: center; }
+.scan__start { font-size: 1.1rem; padding: 14px 22px; }
+.scan__video { display: block; width: 100%; max-height: 60vh; object-fit: cover; border-radius: var(--radius); background: #000; }
+.scan__video[hidden] { display: none; }
+.scan__status { margin-top: 12px; font-weight: 600; min-height: 1.5em; }
+
+/* What a report is about, when it came from a QR code */
+.fixed-subject { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; background: var(--surface-2); }
+.fixed-subject p { margin: 0; }
+.fixed-subject__what { font-size: 1.1rem; }
+
 /* Printable QR codes for "Report a problem" */
 .qr-sheet { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin-top: 20px; }
 .qr-card {
@@ -498,10 +511,19 @@ a.chip:hover { border-color: var(--primary); }
 .qr-card__sub { color: #444; }
 .qr-card__cta { margin-top: 8px; font-weight: 600; }
 .qr-card__url { font-size: .7rem; color: #555; word-break: break-all; margin-top: 4px; }
+/* Stickers for items: smaller, more to a page, no URL to read. */
+.qr-sheet--small { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.qr-sheet--small .qr-card { padding: 8px; }
+.qr-sheet--small .qr { max-width: 1.2in; margin: 4px auto; }
+.qr-sheet--small .qr-card__lead, .qr-sheet--small .qr-card__cta { font-size: .75rem; }
+.qr-sheet--small .qr-card__title { font-size: .95rem; }
+.qr-sheet--small .qr-card__sub { font-size: .85rem; font-weight: 700; color: #000; }
+.qr-sheet--small .qr-card__url { display: none; }
 
 @media print {
   .topbar, .toolbar, .tiles, .task-card__actions, .page-head__actions, .footer, .btn, .no-print, .flash, .offline-banner { display: none !important; }
   .qr-sheet { grid-template-columns: repeat(2, 1fr); margin: 0; }
+  .qr-sheet--small { grid-template-columns: repeat(4, 1fr); }
   .qr-card { border-color: #bbb; }
   .task-card, .card, .table-wrap { box-shadow: none; break-inside: avoid; }
   body { background: #fff; }

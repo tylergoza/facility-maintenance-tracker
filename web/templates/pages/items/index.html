@@ -1,7 +1,10 @@
 {{define "content"}}
 <div class="page-head">
   <div><h1>Items</h1><p class="muted">Everything being tracked, everywhere.</p></div>
-  <a class="btn btn--primary" href="/items/new{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Add item</a>
+  <div class="page-head__actions">
+    <a class="btn btn--ghost" href="/products{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Totals by product</a>
+    <a class="btn btn--primary" href="/items/new{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Add item</a>
+  </div>
 </div>
 <form method="get" action="/items" class="toolbar" data-controller="autosubmit">
   <label class="sr-only" for="q">Search</label>

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"unicode/utf8"
@@ -9,11 +10,20 @@ import (
 )
 
 // reportAccess lets anyone report a problem when an admin has turned on
-// public reports, and otherwise requires signing in.
+// public reports for what it's about (an item, or just a place), and
+// otherwise requires signing in.
 func (s *Server) reportAccess(next http.HandlerFunc) http.Handler {
 	signedIn := s.requireUser(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if currentUser(r) == nil && s.PublicReports() {
+		aboutItem := r.URL.Query().Get("item") != ""
+		if r.Method == http.MethodPost {
+			aboutItem = r.PostFormValue("item_id") != ""
+		}
+		public := s.PublicReports()
+		if aboutItem {
+			public = s.PublicItemReports()
+		}
+		if currentUser(r) == nil && public {
 			w.Header().Set("Cache-Control", "no-store")
 			next(w, r)
 			return
@@ -48,13 +58,32 @@ func (s *Server) problemFormData() (map[string]any, error) {
 	return map[string]any{"Places": tree.All(), "Items": itemOptions(tree, items)}, nil
 }
 
-func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, errs []string) {
+// renderReportForm shows the report form. fixed means it came from a
+// link or QR code for one item (and maybe one of its units), which is
+// shown instead of the place and item pickers.
+func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, fixed bool, errs []string) {
 	data, err := s.problemFormData()
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
+	signedIn := currentUser(r) != nil
 	data["Title"], data["Form"], data["Errors"] = "Report a problem", p, errs
+	data["ItemsOpen"] = signedIn || s.PublicItemReports()
+	data["PlacesOpen"] = signedIn || s.PublicReports()
+	if item, err := s.store.GetItem(p.ItemID); fixed && err == nil {
+		data["Fixed"] = item
+		if p.Unit != 0 {
+			units, err := s.itemUnits(item)
+			if err != nil {
+				s.serverError(w, r, err)
+				return
+			}
+			if p.Unit <= len(units) {
+				data["FixedUnit"] = units[p.Unit-1]
+			}
+		}
+	}
 	s.render(w, r, status, "problems/report", data)
 }
 
@@ -91,6 +120,10 @@ func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter boo
 			errs = append(errs, "That item isn't in the place you chose.")
 		default:
 			p.ItemName, p.PlaceID = item.Name, item.PlaceID
+			// Which one, from a unit's QR code; dropped if it's no longer one.
+			if u := int(formInt(r, "unit")); item.HasUnits() && u >= 1 && u <= item.Quantity {
+				p.Unit = u
+			}
 		}
 	}
 	return errs
@@ -109,34 +142,53 @@ func (s *Server) handleReportForm(w http.ResponseWriter, r *http.Request) {
 	if id, err := s.store.LegacyPlace(queryInt(r, "building"), queryInt(r, "room")); err == nil {
 		p.PlaceID = id
 	}
-	if item, err := s.store.GetItem(queryInt(r, "item")); err == nil {
-		p.ItemID, p.ItemName, p.PlaceID = item.ID, item.Name, item.PlaceID
+	// An item's QR code names it, and a unit's adds the ID on its sticker.
+	// The unit may have moved to another item since it was printed.
+	itemID := queryInt(r, "item")
+	if tag := r.URL.Query().Get("unit"); tag != "" {
+		if id, n, err := s.store.FindUnit(itemID, tag); err == nil {
+			itemID, p.Unit = id, n
+		}
 	}
-	s.renderReportForm(w, r, http.StatusOK, p, nil)
+	fixed := false
+	if item, err := s.store.GetItem(itemID); err == nil {
+		p.ItemID, p.ItemName, p.PlaceID, fixed = item.ID, item.Name, item.PlaceID, true
+		if !item.HasUnits() {
+			p.Unit = 0
+		}
+	}
+	s.renderReportForm(w, r, http.StatusOK, p, fixed, nil)
 }
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	var p store.Problem
 	errs := s.problemFromForm(r, &p, user == nil)
+	fixed := r.PostFormValue("fixed") == "1" && p.ItemID != 0
+	// Where people who aren't signed in land afterwards: somewhere they're
+	// allowed, ready for another report.
+	again := "/report"
+	if p.ItemID != 0 {
+		again = fmt.Sprintf("/report?item=%d", p.ItemID)
+	}
 	if user != nil {
 		p.ReportedBy, p.ReporterName = user.ID, user.Name()
 	} else {
 		// Bots fill in every field; people never see this one.
 		if formStr(r, "website") != "" {
-			s.redirect(w, r, "/report", "Thanks! Your report was sent.")
+			s.redirect(w, r, again, "Thanks! Your report was sent.")
 			return
 		}
 		if p.ReporterName == "" {
 			errs = append(errs, "Enter your name so we can follow up.")
 		}
 		if ip := s.clientIP(r); !s.reportLimiter.allow(ip) {
-			s.renderReportForm(w, r, http.StatusTooManyRequests, p, []string{"Too many reports from this device. Please try again later."})
+			s.renderReportForm(w, r, http.StatusTooManyRequests, p, fixed, []string{"Too many reports from this device. Please try again later."})
 			return
 		}
 	}
 	if errs != nil {
-		s.renderReportForm(w, r, http.StatusUnprocessableEntity, p, errs)
+		s.renderReportForm(w, r, http.StatusUnprocessableEntity, p, fixed, errs)
 		return
 	}
 	if err := s.store.CreateProblem(&p); err != nil {
@@ -145,7 +197,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if user == nil {
 		s.reportLimiter.fail(s.clientIP(r))
-		s.redirect(w, r, "/report", "Thanks! Your report was sent to the facilities team.")
+		s.redirect(w, r, again, "Thanks! Your report was sent to the facilities team.")
 		return
 	}
 	s.redirect(w, r, fmt.Sprintf("/problems/%d", p.ID), "Problem reported.")
@@ -313,7 +365,11 @@ func (s *Server) handleProblemUnit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, to, http.StatusSeeOther)
 		return
 	}
-	if err := s.store.SetProblemUnit(p.ID, unit, currentUser(r).ID); err != nil {
+	if err := s.store.SetProblemUnit(p.ID, unit, currentUser(r).ID); errors.Is(err, store.ErrCounted) {
+		s.setFlash(w, r, "error", p.ItemName+" are only counted, so they aren't numbered.")
+		http.Redirect(w, r, to, http.StatusSeeOther)
+		return
+	} else if err != nil {
 		s.serverError(w, r, err)
 		return
 	}

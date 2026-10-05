@@ -190,6 +190,7 @@
 {{/* Stock pill for a store.Supply; nothing when stock is fine. */}}
 {{define "stock-badge"}}
   {{if eq .Stock "out"}}<span class="badge badge--overdue">Out</span>{{else if eq .Stock "low"}}<span class="badge badge--due-soon">Low</span>{{end}}
+  {{if .Requested}}<span class="badge badge--due-soon">More wanted</span>{{end}}
 {{end}}
 
 {{/*
@@ -273,6 +274,21 @@
       </tbody>
     </table>
   </div>
+{{end}}
+
+{{/*
+  How a product's items are kept: one by one, or only counted. Takes
+  whether it's counted.
+*/}}
+{{define "tracking-choice"}}
+  <fieldset class="fieldset">
+    <legend>Keeping track</legend>
+    <div class="segmented" role="radiogroup" aria-label="Keeping track">
+      <label><input type="radio" name="tracking" value="each" {{if not .}}checked{{end}}> One by one</label>
+      <label><input type="radio" name="tracking" value="count" {{if .}}checked{{end}}> Only count them</label>
+    </div>
+    <p class="hint">One by one numbers each (#1, #2…) so you can record which ones were worked on, and give them IDs. Only count things like chairs and tables that don't need numbers of their own.</p>
+  </fieldset>
 {{end}}
 
 {{/*

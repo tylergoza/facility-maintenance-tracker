@@ -9,6 +9,7 @@
     <p class="muted">{{$s.Location}}</p>
   </div>
   <div class="page-head__actions">
+    <a class="btn btn--ghost btn--sm" href="/supplies/{{$s.ID}}/qr">QR code</a>
     <a class="btn btn--ghost btn--sm" href="/supplies/{{$s.ID}}/edit">Edit</a>
     {{template "delete-button" (dict "Action" (printf "/supplies/%d/delete" $s.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s and its history?" $s.Name))}}
   </div>
@@ -73,6 +74,26 @@
       <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
     </fieldset>
   </form>
+</div>
+
+<div class="card">
+  {{if $s.Requested}}
+    <p><strong>More wanted.</strong> {{with $s.RequestedBy}}{{.}} asked{{else}}Asked{{end}} {{fmtTime $s.RequestedAt}}{{with $s.RequestNote}}: “{{.}}”{{end}}</p>
+    <p class="muted small">Recording a restock above clears this.</p>
+    <form method="post" action="/supplies/{{$s.ID}}/request/cancel" class="inline-form">
+      {{template "csrf" .CSRF}}
+      <button type="submit" class="btn btn--ghost btn--sm">No longer needed</button>
+    </form>
+  {{else}}
+    <form method="post" action="/supplies/{{$s.ID}}/request" class="form">
+      {{template "csrf" .CSRF}}
+      <div class="field">
+        <label for="request_note">Need more? <span class="optional">note optional</span></label>
+        <input id="request_note" name="note" maxlength="200" placeholder="e.g. Two boxes before Sunday, the unscented kind">
+      </div>
+      <div class="form__actions"><button type="submit" class="btn btn--sm">Ask for more</button></div>
+    </form>
+  {{end}}
 </div>
 
 {{if $s.Notes}}<div class="card notes">{{range lines $s.Notes}}<p>{{.}}</p>{{end}}</div>{{end}}

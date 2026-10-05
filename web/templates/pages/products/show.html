@@ -1,0 +1,20 @@
+{{define "content"}}
+{{$p := .Product}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/products">Products</a></nav>
+<div class="page-head">
+  <div>
+    <h1>{{$p.Name}} <span class="muted">× {{$p.Total}}</span></h1>
+    <p class="muted">{{if $p.Category}}{{$p.Category}} · {{end}}{{if $p.Counted}}Counted{{else}}Tracked one by one{{end}} · {{pluralize $p.PlaceCount "place"}}</p>
+  </div>
+  <div class="page-head__actions">
+    <a class="btn btn--primary btn--sm" href="/items/new?product={{$p.ID}}">Add some somewhere else</a>
+    <a class="btn btn--ghost btn--sm" href="/products/{{$p.ID}}/qr">QR codes</a>
+    <a class="btn btn--ghost btn--sm" href="/products/{{$p.ID}}/edit">Edit</a>
+  </div>
+</div>
+{{if $p.Notes}}<div class="card"><div class="notes">{{range lines $p.Notes}}<p>{{.}}</p>{{end}}</div></div>{{end}}
+<section class="section">
+  <h2 class="section__title">Where they are <span class="count">{{len .Items}}</span></h2>
+  {{template "item-table" (dict "Items" .Items "ShowLocation" true "ShowCategory" false "Next" .URI)}}
+</section>
+{{end}}

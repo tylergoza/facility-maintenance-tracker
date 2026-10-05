@@ -93,13 +93,14 @@ type ProblemFilter struct {
 
 const problemSelect = `
 	SELECT p.id, p.place_id,
-	       COALESCE(p.item_id, 0), COALESCE(i.name, ''), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(iu.tag, ''), COALESCE(iu.label, ''),
+	       COALESCE(p.item_id, 0), COALESCE(pr.name, ''), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(iu.tag, ''), COALESCE(iu.label, ''),
 	       p.title, p.details, p.status,
 	       COALESCE(p.assigned_to, 0), COALESCE(NULLIF(a.display_name, ''), a.username, ''),
 	       COALESCE(p.reported_by, 0), p.reporter_name, p.reporter_contact,
 	       p.created_at, p.updated_at, COALESCE(p.resolved_at, '')
 	FROM problems p
 	LEFT JOIN items i ON i.id = p.item_id
+	LEFT JOIN products pr ON pr.id = i.product_id
 	LEFT JOIN item_units iu ON iu.item_id = p.item_id AND iu.number = p.unit
 	LEFT JOIN users a ON a.id = p.assigned_to`
 
@@ -179,9 +180,12 @@ func (s *Store) GetProblem(id int64) (*Problem, error) {
 // CreateProblem records a new report. It starts open and unassigned.
 func (s *Store) CreateProblem(p *Problem) error {
 	p.Title, p.Status = strings.TrimSpace(p.Title), ProblemOpen
-	res, err := s.DB.Exec(`INSERT INTO problems (place_id, item_id, title, details, reported_by, reporter_name, reporter_contact)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.PlaceID, nullInt(p.ItemID), p.Title, p.Details, nullInt(p.ReportedBy),
+	if p.ItemID == 0 {
+		p.Unit = 0
+	}
+	res, err := s.DB.Exec(`INSERT INTO problems (place_id, item_id, unit, title, details, reported_by, reporter_name, reporter_contact)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.PlaceID, nullInt(p.ItemID), nullInt(int64(p.Unit)), p.Title, p.Details, nullInt(p.ReportedBy),
 		strings.TrimSpace(p.ReporterName), strings.TrimSpace(p.ReporterContact))
 	if err != nil {
 		return err
@@ -206,6 +210,10 @@ func (s *Store) SaveProblemDetails(p *Problem) error {
 // ErrNoItem is returned when setting a unit on a problem with no item.
 var ErrNoItem = errors.New("problem has no item")
 
+// ErrCounted is returned when naming units of a counted item, which has
+// none.
+var ErrCounted = errors.New("counted items have no units")
+
 // SetProblemUnit records which of the item's units a problem is about (0
 // to clear it) and notes it in the timeline.
 func (s *Store) SetProblemUnit(problemID int64, unit int, userID int64) error {
@@ -216,12 +224,17 @@ func (s *Store) SetProblemUnit(problemID int64, unit int, userID int64) error {
 	defer tx.Rollback()
 	var itemID int64
 	var quantity, current int
-	if err := tx.QueryRow(`SELECT COALESCE(p.item_id, 0), COALESCE(i.quantity, 0), COALESCE(p.unit, 0)
-		FROM problems p LEFT JOIN items i ON i.id = p.item_id WHERE p.id = ?`, problemID).Scan(&itemID, &quantity, &current); err != nil {
+	var counted bool
+	if err := tx.QueryRow(`SELECT COALESCE(p.item_id, 0), COALESCE(i.quantity, 0), COALESCE(p.unit, 0), COALESCE(pr.counted, 0)
+		FROM problems p LEFT JOIN items i ON i.id = p.item_id LEFT JOIN products pr ON pr.id = i.product_id WHERE p.id = ?`, problemID).
+		Scan(&itemID, &quantity, &current, &counted); err != nil {
 		return notFound(err)
 	}
 	if itemID == 0 {
 		return ErrNoItem
+	}
+	if counted && unit != 0 {
+		return ErrCounted
 	}
 	if unit == current {
 		return nil

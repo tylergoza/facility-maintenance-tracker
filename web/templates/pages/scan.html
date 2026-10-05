@@ -1,0 +1,14 @@
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1>Scan a QR code</h1>
+    <p class="muted">Scan a code on a door, an item's sticker or a supply's shelf to report a problem or update the count.</p>
+  </div>
+</div>
+<div class="card narrow scan" data-controller="scan" data-scan-origins-value="{{.Origins}}">
+  <button type="button" class="btn btn--primary scan__start" data-scan-target="start" data-action="scan#start">Start the camera</button>
+  <video class="scan__video" data-scan-target="video" playsinline muted hidden></video>
+  <p class="scan__status" data-scan-target="status" role="status" aria-live="polite"></p>
+  <p class="hint">Your phone's own camera app reads these codes too. The camera is only used while this page is open, and nothing it sees leaves your phone.</p>
+</div>
+{{end}}

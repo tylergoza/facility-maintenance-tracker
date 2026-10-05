@@ -73,8 +73,19 @@ func (s *Server) routes() http.Handler {
 	auth("POST /items/{id}/replace", s.handleReplace)
 	auth("GET /items/{id}/move", s.handleMoveForm)
 	auth("POST /items/{id}/move", s.handleMove)
+	auth("GET /items/{id}/qr", s.handleItemQR)
 	auth("GET /items/{id}/units", s.handleUnitsForm)
 	auth("POST /items/{id}/units", s.handleUnitsSave)
+
+	auth("GET /products", s.handleProducts)
+	auth("GET /products/{id}", s.handleProductShow)
+	auth("GET /products/{id}/edit", s.handleProductEdit)
+	auth("POST /products/{id}", s.handleProductUpdate)
+	auth("POST /products/{id}/merge", s.handleProductMerge)
+	auth("GET /products/{id}/qr", s.handleProductQR)
+
+	// Scanning QR codes with the camera
+	auth("GET /scan", s.handleScan)
 
 	auth("GET /supplies", s.handleSupplies)
 	auth("GET /supplies/new", s.handleSupplyNew)
@@ -84,6 +95,10 @@ func (s *Server) routes() http.Handler {
 	auth("POST /supplies/{id}", s.handleSupplyUpdate)
 	auth("POST /supplies/{id}/delete", s.handleSupplyDelete)
 	auth("POST /supplies/{id}/adjust", s.handleSupplyAdjust)
+	auth("POST /supplies/{id}/request", s.handleSupplyRequest)
+	auth("POST /supplies/{id}/request/cancel", s.handleSupplyRequestCancel)
+	auth("GET /supplies/{id}/qr", s.handleSupplyQR)
+	auth("GET /supplies/qr", s.handleSuppliesQR)
 
 	auth("GET /problems", s.handleProblems)
 	auth("GET /problems/{id}", s.handleProblemShow)
@@ -118,6 +133,12 @@ func (s *Server) routes() http.Handler {
 	admin("GET /admin/settings", s.handleSettings)
 	admin("POST /admin/settings", s.handleSettingsUpdate)
 	admin("GET /admin/backup", s.handleBackup)
+	admin("GET /admin/tokens", s.handleTokens)
+	admin("POST /admin/tokens", s.handleTokenCreate)
+	admin("POST /admin/tokens/{id}/delete", s.handleTokenDelete)
+
+	// Other apps, with an API token
+	s.apiRoutes(mux)
 
 	mux.HandleFunc("/", s.notFound)
 
@@ -172,7 +193,7 @@ const sessionCookie = "mt_session"
 
 func (s *Server) loadSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") {
+		if strings.HasPrefix(r.URL.Path, "/static/") || strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -191,12 +212,13 @@ func (s *Server) loadSession(next http.Handler) http.Handler {
 // csrf implements the double-submit cookie pattern: every visitor gets a
 // random token cookie and every POST must echo it in the _csrf field (or
 // X-CSRF-Token header). Combined with SameSite=Lax cookies this blocks
-// cross-site form posts.
+// cross-site form posts. The API is left out: it only takes tokens sent
+// in a header, which other sites can't make a browser send.
 const csrfCookie = "mt_csrf"
 
 func (s *Server) csrf(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") {
+		if strings.HasPrefix(r.URL.Path, "/static/") || strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}

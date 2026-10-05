@@ -170,13 +170,14 @@ type TaskFilter struct {
 }
 
 const taskSelect = `
-	SELECT t.id, t.item_id, i.name, i.category, i.place_id,
+	SELECT t.id, t.item_id, p.name, p.category, i.place_id,
 	       t.name, t.description, COALESCE(t.interval_value, 0), COALESCE(t.interval_unit, ''),
 	       COALESCE(t.last_completed_on, ''), COALESCE(t.next_due_on, ''), t.active,
 	       COALESCE(t.supply_id, 0), t.supply_amount, t.supply_always, COALESCE(s.name, ''), COALESCE(s.unit, ''),
 	       COALESCE(s.quantity, 0), COALESCE(s.reorder_at, 0), COALESCE(s.place_id, 0)
 	FROM tasks t
 	JOIN items i ON i.id = t.item_id
+	JOIN products p ON p.id = i.product_id
 	LEFT JOIN supplies s ON s.id = t.supply_id`
 
 // scanTasks reads tasks and fills in where their items and supplies are.
@@ -319,7 +320,7 @@ type LogFilter struct {
 
 func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 	q := `
-		SELECT l.id, l.item_id, i.name, COALESCE(l.task_id, 0), COALESCE(t.name, ''), l.kind, COALESCE(l.replaced, 0), COALESCE(s.name, ''),
+		SELECT l.id, l.item_id, p.name, COALESCE(l.task_id, 0), COALESCE(t.name, ''), l.kind, COALESCE(l.replaced, 0), COALESCE(s.name, ''),
 		       i.place_id,
 		       l.performed_on, l.performed_by, COALESCE(l.cost_cents, 0), l.notes,
 		       COALESCE(NULLIF(u.display_name, ''), u.username, ''),
@@ -328,6 +329,7 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 		       COALESCE((SELECT group_concat(unit) FROM log_units WHERE log_id = l.id), '')
 		FROM maintenance_logs l
 		JOIN items i ON i.id = l.item_id
+		JOIN products p ON p.id = i.product_id
 		LEFT JOIN tasks t ON t.id = l.task_id
 		LEFT JOIN users u ON u.id = l.created_by
 		LEFT JOIN supplies s ON s.id = i.supply_id
@@ -429,8 +431,13 @@ func (s *Store) RecordMaintenance(c Completion) error {
 	}
 	var itemSupply int64
 	var quantity int
-	if err := tx.QueryRow(`SELECT COALESCE(supply_id, 0), quantity FROM items WHERE id = ?`, c.ItemID).Scan(&itemSupply, &quantity); err != nil {
+	var counted bool
+	if err := tx.QueryRow(`SELECT COALESCE(i.supply_id, 0), i.quantity, p.counted FROM items i JOIN products p ON p.id = i.product_id WHERE i.id = ?`, c.ItemID).
+		Scan(&itemSupply, &quantity, &counted); err != nil {
 		return notFound(err)
+	}
+	if counted && len(c.Units) > 0 {
+		return ErrCounted
 	}
 	if err := checkUnits(c.Units, quantity); err != nil {
 		return err
@@ -455,8 +462,9 @@ func (s *Store) RecordMaintenance(c Completion) error {
 	}
 	if c.SupplyID != 0 && c.SupplyAmount > 0 {
 		var itemName, taskName, number, place string // only for the history note; blank is fine
-		_ = tx.QueryRow(`SELECT i.name, COALESCE(t.name, ''), p.number, p.name
-			FROM items i JOIN places p ON p.id = i.place_id LEFT JOIN tasks t ON t.id = ? WHERE i.id = ?`, c.TaskID, c.ItemID).
+		_ = tx.QueryRow(`SELECT pr.name, COALESCE(t.name, ''), p.number, p.name
+			FROM items i JOIN products pr ON pr.id = i.product_id JOIN places p ON p.id = i.place_id
+			LEFT JOIN tasks t ON t.id = ? WHERE i.id = ?`, c.TaskID, c.ItemID).
 			Scan(&itemName, &taskName, &number, &place)
 		if place != "" {
 			itemName += ", " + RoomLabel(number, place)

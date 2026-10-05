@@ -11,9 +11,14 @@ import (
 
 // Supplies ---------------------------------------------------------------
 
-func (s *Server) handleSupplies(w http.ResponseWriter, r *http.Request) {
+// supplyFilter reads the Supplies page's filters.
+func supplyFilter(r *http.Request) store.SupplyFilter {
 	q := r.URL.Query()
-	f := store.SupplyFilter{PlaceID: queryInt(r, "place"), Tag: q.Get("tag"), Query: q.Get("q"), LowOnly: q.Get("low") == "1"}
+	return store.SupplyFilter{PlaceID: queryInt(r, "place"), Tag: q.Get("tag"), Query: q.Get("q"), LowOnly: q.Get("low") == "1"}
+}
+
+func (s *Server) handleSupplies(w http.ResponseWriter, r *http.Request) {
+	f := supplyFilter(r)
 	supplies, err := s.store.ListSupplies(f)
 	if err != nil {
 		s.serverError(w, r, err)
@@ -25,7 +30,7 @@ func (s *Server) handleSupplies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "supplies/index", map[string]any{
-		"Title": "Supplies", "Supplies": supplies, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f,
+		"Title": "Supplies", "Supplies": supplies, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f, "Query": r.URL.RawQuery,
 	})
 }
 
@@ -232,4 +237,39 @@ func (s *Server) handleSupplyAdjust(w http.ResponseWriter, r *http.Request) {
 		msg += " Time to reorder."
 	}
 	s.redirect(w, r, next, msg)
+}
+
+// handleSupplyRequest asks for more of a supply, often right after
+// scanning its QR code.
+func (s *Server) handleSupplyRequest(w http.ResponseWriter, r *http.Request) {
+	sp, err := s.store.GetSupply(pathID(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	to := fmt.Sprintf("/supplies/%d", sp.ID)
+	note := formStr(r, "note")
+	if msg := tooLong("Note", note, 200); msg != nil {
+		s.setFlash(w, r, "error", msg[0])
+		http.Redirect(w, r, to, http.StatusSeeOther)
+		return
+	}
+	if err := s.store.RequestSupply(sp.ID, currentUser(r).ID, note); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.redirect(w, r, to, "Asked for more "+sp.Name+". It's flagged on the dashboard until it's restocked.")
+}
+
+func (s *Server) handleSupplyRequestCancel(w http.ResponseWriter, r *http.Request) {
+	sp, err := s.store.GetSupply(pathID(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if err := s.store.CancelSupplyRequest(sp.ID); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.redirect(w, r, fmt.Sprintf("/supplies/%d", sp.ID), "Request for more "+sp.Name+" cleared.")
 }

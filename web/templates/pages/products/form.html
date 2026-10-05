@@ -1,0 +1,47 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/products">Products</a> › <a href="/products/{{.Form.ID}}">{{.Form.Name}}</a></nav>
+<div class="page-head"><div><h1>{{.Title}}</h1><p class="muted">Changes here apply to every one of them, in all {{pluralize .Form.PlaceCount "place"}}.</p></div></div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="/products/{{.Form.ID}}" class="form">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Form.Name}}" required autofocus maxlength="100">
+    </div>
+    <div class="field">
+      <label for="category">Category <span class="optional">optional</span></label>
+      <input id="category" name="category" value="{{.Form.Category}}" list="categories">
+      <datalist id="categories">{{range .Categories}}<option value="{{.}}">{{end}}</datalist>
+    </div>
+    {{template "tracking-choice" .Form.Counted}}
+    {{if not .Form.Counted}}<p class="hint">Switching to only counting them drops their IDs and notes, and which ones history and problems were about.</p>{{end}}
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="3" placeholder="Stacks 10 high, folds flat, needs the cart…">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save product</button>
+      <a class="btn btn--ghost" href="/products/{{.Form.ID}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{if .Others}}
+<div class="card narrow">
+  <h2 class="section__title">Merge into another product</h2>
+  <p class="muted small">If these are the same thing under another name ("Chairs, folding" and "Folding chairs"), make every one of them an item of that product instead. It keeps its own name, category and counting; any IDs already used there are given new ones.</p>
+  <form method="post" action="/products/{{.Form.ID}}/merge" class="form"
+        data-controller="confirm" data-confirm-message-value="Merge {{.Form.Name}} into the product you chose? This can't be undone." data-action="submit->confirm#check">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="into">Merge into</label>
+      <select id="into" name="into" required>
+        <option value="">Choose…</option>
+        {{range .Others}}<option value="{{.ID}}">{{.Name}}{{if .Category}} · {{.Category}}{{end}} ({{.Total}})</option>{{end}}
+      </select>
+    </div>
+    <div class="form__actions"><button type="submit" class="btn btn--sm">Merge</button></div>
+  </form>
+</div>
+{{end}}
+{{end}}

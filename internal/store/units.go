@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -18,8 +19,9 @@ const FrequentReplacements = 3
 // is its ID, what's on its sticker, and goes wherever it does.
 //
 // IDs start out as the unit's number and are unique among its kind: the
-// units of every portable item with the same name ("Lapel mics" 1, 2, 3
-// across rooms), or of just its own item when it isn't portable.
+// units of every portable item of the same product ("Lapel mics" 1, 2, 3
+// across rooms), or of just its own item when it isn't portable. Items
+// of counted products have no units.
 type Unit struct {
 	Number int
 	Tag    string // its ID, e.g. "2" or "Mic 2"
@@ -201,8 +203,8 @@ func saveUnit(tx *sql.Tx, itemID int64, u Unit) error {
 }
 
 // UnitIDsTaken returns the IDs, lower-cased, that other items of the same
-// kind use: other portable items named name, when portable. itemID is the
-// item asking (0 for a new one).
+// kind use: other portable items of the product named name, when
+// portable. itemID is the item asking (0 for a new one).
 func (s *Store) UnitIDsTaken(itemID int64, name string, portable bool) (map[string]bool, error) {
 	return unitIDsTaken(s.DB, itemID, name, portable)
 }
@@ -213,8 +215,10 @@ func unitIDsTaken(q querier, itemID int64, name string, portable bool) (map[stri
 		return taken, nil
 	}
 	rows, err := q.Query(`
-		SELECT u.tag FROM items o JOIN item_units u ON u.item_id = o.id AND u.number <= o.quantity
-		WHERE o.portable = 1 AND o.name = ? COLLATE NOCASE AND o.id != ? AND u.tag != ''`, strings.TrimSpace(name), itemID)
+		SELECT u.tag FROM items o
+		JOIN products p ON p.id = o.product_id
+		JOIN item_units u ON u.item_id = o.id AND u.number <= o.quantity
+		WHERE o.portable = 1 AND p.name = ? AND o.id != ? AND u.tag != ''`, strings.TrimSpace(name), itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -231,13 +235,17 @@ func unitIDsTaken(q querier, itemID int64, name string, portable bool) (map[stri
 
 // fillUnitIDs drops an item's units past its count and gives each unit
 // without an ID one: its number when no other of its kind has that, or
-// else the number after the highest in use.
+// else the number after the highest in use. Counted items keep none.
 func fillUnitIDs(tx *sql.Tx, itemID int64) error {
 	var name string
 	var quantity int
-	var portable bool
-	if err := tx.QueryRow(`SELECT name, quantity, portable FROM items WHERE id = ?`, itemID).Scan(&name, &quantity, &portable); err != nil {
+	var portable, counted bool
+	if err := tx.QueryRow(`SELECT p.name, i.quantity, i.portable, p.counted FROM items i JOIN products p ON p.id = i.product_id WHERE i.id = ?`, itemID).
+		Scan(&name, &quantity, &portable, &counted); err != nil {
 		return notFound(err)
+	}
+	if counted {
+		quantity = 0
 	}
 	if _, err := tx.Exec(`DELETE FROM item_units WHERE item_id = ? AND number > ?`, itemID, quantity); err != nil {
 		return err
@@ -314,4 +322,34 @@ func checkUnits(units []int, quantity int) error {
 		}
 	}
 	return nil
+}
+
+// FindUnit finds the unit with an ID (what's on its sticker), starting
+// from the item it was on when the sticker was printed. Moves can take a
+// portable unit to another item of the same product, so those are
+// searched too. It returns the item it's on now and its number there.
+func (s *Store) FindUnit(itemID int64, tag string) (int64, int, error) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return 0, 0, ErrNotFound
+	}
+	var productID int64
+	var portable, counted bool
+	if err := s.DB.QueryRow(`SELECT i.product_id, i.portable, p.counted FROM items i JOIN products p ON p.id = i.product_id WHERE i.id = ?`, itemID).
+		Scan(&productID, &portable, &counted); err != nil {
+		return 0, 0, notFound(err)
+	}
+	if counted {
+		return 0, 0, ErrNotFound
+	}
+	var number int
+	err := s.DB.QueryRow(`SELECT u.number FROM item_units u JOIN items i ON i.id = u.item_id
+		WHERE u.item_id = ? AND u.tag = ? COLLATE NOCASE AND u.number <= i.quantity`, itemID, tag).Scan(&number)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) || !portable {
+		return itemID, number, notFound(err)
+	}
+	err = s.DB.QueryRow(`SELECT u.item_id, u.number FROM item_units u JOIN items i ON i.id = u.item_id
+		WHERE i.product_id = ? AND i.portable = 1 AND u.tag = ? COLLATE NOCASE AND u.number <= i.quantity
+		ORDER BY u.item_id LIMIT 1`, productID, tag).Scan(&itemID, &number)
+	return itemID, number, notFound(err)
 }

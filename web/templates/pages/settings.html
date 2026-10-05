@@ -18,11 +18,20 @@
       <input id="due_soon_days" name="due_soon_days" type="number" min="1" max="365" value="{{.DueSoonDays}}" required>
       <p class="hint">Tasks due within this many days are flagged as "Due soon" on the dashboard.</p>
     </div>
-    <label class="check">
-      <input type="checkbox" name="public_reports" value="1" {{if .PublicReportsValue}}checked{{end}}>
-      Let anyone report a problem without signing in
-    </label>
-    <p class="hint">Adds a "Report a problem" link for visitors at <code>{{.ReportURL}}</code>. Print QR codes from any place's page, one at a time or for everything inside it at once. Signed-in users can always report problems. Reports are limited to 10 an hour from each device.</p>
+    <fieldset class="fieldset">
+      <legend>Reporting without signing in</legend>
+      <label class="check">
+        <input type="checkbox" name="public_reports" value="1" {{if .PublicReportsValue}}checked{{end}}>
+        Let anyone report a problem with a place
+      </label>
+      <p class="hint">For QR codes on doors and walls. Adds a "Report a problem" link for visitors at <code>{{.ReportURL}}</code>. Print codes from any place's page, one at a time or for everything inside it at once.</p>
+      <label class="check">
+        <input type="checkbox" name="public_item_reports" value="1" {{if .PublicItemReportsValue}}checked{{end}}>
+        Let anyone report a problem with an item
+      </label>
+      <p class="hint">For QR stickers on the things themselves (a projector, a mic, each of a set), printed from an item's or product's page.</p>
+      <p class="hint">With either off, people who scan those codes are asked to sign in first. Signed-in users can always report problems, and can scan codes from the Scan page. Reports from people who aren't signed in are limited to 10 an hour from each device.</p>
+    </fieldset>
     <div class="form__actions"><button type="submit" class="btn btn--primary">Save settings</button></div>
   </form>
 </div>

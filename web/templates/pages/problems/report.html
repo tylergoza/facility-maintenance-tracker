@@ -12,14 +12,28 @@
   {{else}}
   <form method="post" action="/report" class="form" data-controller="place-picker">
     {{template "csrf" .CSRF}}
-    {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Where is it?" "Required" true "Blank" "Choose…")}}
-    <div class="field">
-      <label for="item_id">What's it about? <span class="optional">optional</span></label>
-      <select id="item_id" name="item_id" data-place-picker-target="item">
-        <option value="">— Nothing specific / not sure —</option>
-        {{range .Items}}<option value="{{.ID}}" data-lineage="{{.Lineage}}" {{if eq .ID $.Form.ItemID}}selected{{end}}>{{.Label}}</option>{{end}}
-      </select>
-    </div>
+    {{with .Fixed}}
+      <input type="hidden" name="fixed" value="1">
+      <input type="hidden" name="place_id" value="{{.PlaceID}}">
+      <input type="hidden" name="item_id" value="{{.ID}}">
+      {{with $.FixedUnit}}<input type="hidden" name="unit" value="{{.Number}}">{{end}}
+      <div class="fixed-subject">
+        <p class="fixed-subject__what"><strong>{{.Name}}</strong>{{with $.FixedUnit}} <span class="badge">ID {{.ID}}</span>{{end}}</p>
+        <p class="muted small">{{.Location}}{{if $.User}} · <a href="/items/{{.ID}}">Open its page</a>{{end}}</p>
+        {{if $.PlacesOpen}}<p class="small"><a href="/report?place={{.PlaceID}}">Something else here?</a></p>{{end}}
+      </div>
+    {{else}}
+      {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Where is it?" "Required" true "Blank" "Choose…")}}
+      {{if .ItemsOpen}}
+      <div class="field">
+        <label for="item_id">What's it about? <span class="optional">optional</span></label>
+        <select id="item_id" name="item_id" data-place-picker-target="item">
+          <option value="">— Nothing specific / not sure —</option>
+          {{range .Items}}<option value="{{.ID}}" data-lineage="{{.Lineage}}" {{if eq .ID $.Form.ItemID}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </div>
+      {{end}}
+    {{end}}
     <div class="field">
       <label for="title">What's wrong?</label>
       <input id="title" name="title" value="{{.Form.Title}}" required maxlength="200" {{if not .Form.Title}}autofocus{{end}} placeholder="e.g. Faucet dripping, light out, door won't latch">

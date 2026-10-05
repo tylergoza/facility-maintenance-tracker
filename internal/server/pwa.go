@@ -76,6 +76,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		},
 		"shortcuts": []map[string]string{
 			{"name": "Dashboard", "url": "/"},
+			{"name": "Scan", "url": "/scan"},
 			{"name": "Items", "url": "/items"},
 		},
 	}

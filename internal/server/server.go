@@ -54,10 +54,11 @@ type Server struct {
 	tmplMu sync.Mutex
 	tmpls  map[string]*template.Template
 
-	dueSoonDays   atomic.Int64
-	siteName      atomic.Value
-	siteURL       atomic.Value // public address, e.g. "https://maint.example.org"; "" = use the request
-	publicReports atomic.Bool
+	dueSoonDays       atomic.Int64
+	siteName          atomic.Value
+	siteURL           atomic.Value // public address, e.g. "https://maint.example.org"; "" = use the request
+	publicReports     atomic.Bool
+	publicItemReports atomic.Bool
 
 	limiter       *loginLimiter
 	reportLimiter *loginLimiter // public problem reports per IP
@@ -101,6 +102,7 @@ func (s *Server) reloadSettings() {
 	s.dueSoonDays.Store(int64(days))
 	s.siteName.Store(s.store.Setting("site_name", "Facility Maintenance"))
 	s.publicReports.Store(s.store.Setting("public_reports", "0") == "1")
+	s.publicItemReports.Store(s.store.Setting("public_item_reports", "0") == "1")
 	s.siteURL.Store(s.store.Setting("site_url", ""))
 }
 
@@ -108,9 +110,13 @@ func (s *Server) SiteName() string { return s.siteName.Load().(string) }
 func (s *Server) SiteURL() string  { return s.siteURL.Load().(string) }
 func (s *Server) DueSoonDays() int { return int(s.dueSoonDays.Load()) }
 
-// PublicReports reports whether anyone may report a problem without
-// signing in.
+// PublicReports reports whether anyone may report a problem with a place
+// (from a QR code on its door, say) without signing in.
 func (s *Server) PublicReports() bool { return s.publicReports.Load() }
+
+// PublicItemReports reports whether anyone may report a problem with an
+// item (from a QR code on its sticker) without signing in.
+func (s *Server) PublicItemReports() bool { return s.publicItemReports.Load() }
 
 // computeAssets hashes the static tree and builds the import map. The
 // import map is an inline script, so its hash goes into the CSP.
@@ -250,6 +256,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 	data["CSRF"] = csrfToken(r)
 	data["SiteName"] = s.SiteName()
 	data["PublicReports"] = s.PublicReports()
+	data["PublicItemReports"] = s.PublicItemReports()
 	data["ImportMap"] = s.importMap
 	data["AssetVersion"] = s.assetVersion
 	data["Path"] = r.URL.Path

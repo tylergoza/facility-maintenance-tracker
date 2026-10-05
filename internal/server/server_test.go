@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -511,9 +512,9 @@ func TestProblems(t *testing.T) {
 	addPlaces(c, "building:Main", "room:2:110:Kitchen") // places 2, 3
 	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Sink"}}, 200)
 
-	if body := c.get("/report?item=1", 200); !strings.Contains(body, `value="1" data-lineage="3 2 1" selected>Sink (110 – Kitchen)`) ||
-		!strings.Contains(body, `value="3" data-path="Main › 110 – Kitchen" data-kind="room" selected>`) {
-		t.Error("report form should be preset from the item")
+	if body := c.get("/report?item=1", 200); !strings.Contains(body, `<input type="hidden" name="item_id" value="1">`) ||
+		!strings.Contains(body, `<input type="hidden" name="place_id" value="3">`) || !strings.Contains(body, "<strong>Sink</strong>") {
+		t.Error("report form should be about the item")
 	}
 	body := c.post("/report", "/report", url.Values{"place_id": {"2"}, "item_id": {"1"}, "title": {"Faucet dripping"}, "details": {"Hot side"}}, 200)
 	for _, want := range []string{"Problem reported.", "Faucet dripping", "Nobody is on it yet", "by Alex", "Sink"} {
@@ -576,7 +577,7 @@ func TestProblems(t *testing.T) {
 	}
 
 	c.post("/login", "/login", url.Values{"username": {"admin"}, "password": {"a long password"}}, 200)
-	c.post("/admin/settings", "/admin/settings", url.Values{"site_name": {"Main"}, "due_soon_days": {"30"}, "public_reports": {"1"}}, 200)
+	c.post("/admin/settings", "/admin/settings", url.Values{"site_name": {"Main"}, "due_soon_days": {"30"}, "public_reports": {"1"}, "public_item_reports": {"1"}}, 200)
 	if !strings.Contains(c.get("/admin/settings", 200), `name="public_reports" value="1" checked`) {
 		t.Error("settings should show public reports turned on")
 	}
@@ -860,7 +861,7 @@ func TestSiteAddressAndQRCodes(t *testing.T) {
 
 	// No site address yet: codes use the address in use, with warnings.
 	sheet := c.get("/places/3/qr", 200)
-	for _, want := range []string{"<svg class=\"qr\"", c.base + "/report?place=3", "104 – Nursery", "Public reporting is off", "set the site address"} {
+	for _, want := range []string{"<svg class=\"qr\"", c.base + "/report?place=3", "104 – Nursery", "Reporting problems with places without signing in is off", "set the site address"} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("room QR page missing %q", want)
 		}
@@ -887,7 +888,7 @@ func TestSiteAddressAndQRCodes(t *testing.T) {
 			t.Errorf("building QR sheet missing %q", want)
 		}
 	}
-	if strings.Count(sheet, "<svg class=\"qr\"") != 3 || strings.Contains(sheet, "Public reporting is off") || strings.Contains(sheet, "set the site address") {
+	if strings.Count(sheet, "<svg class=\"qr\"") != 3 || strings.Contains(sheet, "Reporting problems with places without signing in is off") || strings.Contains(sheet, "set the site address") {
 		t.Error("building sheet should have 3 codes and no warnings")
 	}
 	// Clearing it goes back to the request's address.
@@ -1047,5 +1048,314 @@ func TestPlaces(t *testing.T) {
 	}
 	if body := c.get("/report?room=9", 200); !strings.Contains(body, `value="5" data-path="Grace Church › Main › 201 – Nursery" data-kind="room" selected>`) {
 		t.Error("old room QR codes should preselect the room")
+	}
+}
+
+func TestProducts(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	addPlaces(c, "building:Main", "room:2::Hall", "room:2::Gym") // places 2, 3, 4
+
+	// Counted from the start: IDs on the form are ignored.
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Folding chairs"}, "category": {"Furniture"}, "quantity": {"40"},
+		"portable": {"1"}, "tracking": {"count"}, "unit_ids": {"A, A"}}, 200)
+	// The same name is the same product: its category and counting stand.
+	body := c.post("/items/new?product=1", "/items", url.Values{"place_id": {"4"}, "name": {"folding chairs"}, "category": {"Seating"}, "quantity": {"60"},
+		"portable": {"1"}, "tracking": {"each"}}, 200)
+	if !strings.Contains(body, "100 Folding chairs in all") || !strings.Contains(body, `<span class="badge">Counted</span>`) {
+		t.Error("item page should show the product's total and that it's counted")
+	}
+	if it, _ := st.GetItem(2); it.ProductID != 1 || !it.Counted || it.Category != "Furniture" {
+		t.Errorf("gym chairs = %+v", it)
+	}
+	if body := c.get("/items/new?product=1", 200); !strings.Contains(body, `value="Folding chairs"`) {
+		t.Error("adding more of a product should fill in its name")
+	}
+	if body := c.get("/items/2/move", 200); strings.Contains(body, `name="units"`) {
+		t.Error("counted items have no units to pick")
+	}
+	if body := c.get("/items/2/units", 200); !strings.Contains(body, "only counted") {
+		t.Error("counted items have no IDs page")
+	}
+	body = c.get("/products", 200)
+	if !strings.Contains(body, "Folding chairs") || !strings.Contains(body, `<span class="qty">100</span>`) {
+		t.Error("products page should total chairs across places")
+	}
+	if body := c.get("/products?place=4", 200); !strings.Contains(body, `<span class="qty">60</span>`) {
+		t.Error("products in one place should total only those")
+	}
+	if body := c.get("/products/1", 200); !strings.Contains(body, "Main › Hall") || !strings.Contains(body, "Main › Gym") {
+		t.Error("product page should list where they are")
+	}
+
+	// Editing the product; renaming onto another is refused.
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Chairs, folding"}, "quantity": {"2"}, "portable": {"1"}}, 200)
+	if body := c.post("/products/2/edit", "/products/2", url.Values{"name": {"folding chairs"}, "tracking": {"each"}}, 422); !strings.Contains(body, "already a product called folding chairs") {
+		t.Error("renaming onto another product should be refused")
+	}
+	c.post("/products/1/edit", "/products/1", url.Values{"name": {"Folding chairs"}, "category": {"Furniture"}, "tracking": {"count"}, "notes": {"Stack 10 high"}}, 200)
+	body = c.post("/products/2/edit", "/products/2/merge", url.Values{"into": {"1"}}, 200)
+	if !strings.Contains(body, "Chairs, folding merged into Folding chairs.") || !strings.Contains(body, "Stack 10 high") {
+		t.Error("merging should land on the product it went into")
+	}
+	if p, _ := st.GetProduct(1); p.Total != 102 || p.ItemCount != 3 {
+		t.Errorf("after merge = %+v", p)
+	}
+	if body := c.post("/products/1/edit", "/products/1/merge", url.Values{"into": {"1"}}, 422); !strings.Contains(body, "Choose the product to merge it into.") {
+		t.Error("merging into itself should be refused")
+	}
+	for _, p := range []string{"/products", "/products/1", "/products/1/edit", "/products?q=chair&counted=1&portable=1&category=Furniture"} {
+		c.get(p, 200)
+	}
+	c.get("/products/99", 404)
+}
+
+// apiGet calls the API with a token ("" for none) and decodes the JSON.
+func (c *client) apiGet(token, path string, wantStatus int, into any) {
+	c.t.Helper()
+	req, _ := http.NewRequest("GET", c.base+path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != wantStatus {
+		c.t.Fatalf("GET %s: status %d, want %d\n%s", path, resp.StatusCode, wantStatus, body)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		c.t.Fatalf("GET %s: content type %q", path, ct)
+	}
+	if into != nil {
+		if err := json.Unmarshal(body, into); err != nil {
+			c.t.Fatalf("GET %s: %v\n%s", path, err, body)
+		}
+	}
+}
+
+var tokenRe = regexp.MustCompile(`<code class="token">(mt_[^<]+)</code>`)
+
+func TestAPI(t *testing.T) {
+	c, _ := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	addPlaces(c, "building:Main", "room:2::Hall", "room:2::Gym") // places 2, 3, 4
+	c.post("/places/3/edit", "/places/3", url.Values{"kind": {"room"}, "parent_id": {"2"}, "name": {"Hall"}, "tags": {"events"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Folding chairs"}, "category": {"Furniture"}, "quantity": {"40"}, "portable": {"1"}, "tracking": {"count"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"4"}, "name": {"Folding chairs"}, "quantity": {"60"}, "portable": {"1"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"4"}, "name": {"Lapel mics"}, "quantity": {"2"}, "portable": {"1"}, "unit_ids": {"Mic A, Mic B"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"place_id": {"3"}, "name": {"Tablecloths"}, "reusable": {"1"}, "quantity": {"8"}, "in_use": {"2"}}, 200)
+
+	// No token, a made-up one, or only a session: refused.
+	var e struct{ Error string }
+	c.apiGet("", "/api/v1/products", 401, &e)
+	if !strings.Contains(e.Error, "Bearer") {
+		t.Errorf("error = %q", e.Error)
+	}
+	c.apiGet("mt_made-up", "/api/v1/products", 401, nil)
+
+	body := c.post("/admin/tokens", "/admin/tokens", url.Values{"name": {"Event planner"}}, 200)
+	m := tokenRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("the new token should be shown once")
+	}
+	token := m[1]
+	if body := c.get("/admin/tokens", 200); strings.Contains(body, token) || !strings.Contains(body, token[:9]+"…") || !strings.Contains(body, "Never") {
+		t.Error("the token list should show only the start of each token")
+	}
+	if body := c.post("/admin/tokens", "/admin/tokens", url.Values{"name": {""}}, 422); !strings.Contains(body, "Name what will use it") {
+		t.Error("a token needs a name")
+	}
+
+	var products struct{ Products []apiProductJSON }
+	c.apiGet(token, "/api/v1/products", 200, &products)
+	if len(products.Products) != 2 || products.Products[0].Name != "Folding chairs" || products.Products[0].Total != 100 || !products.Products[0].Counted {
+		t.Errorf("products = %+v", products)
+	}
+	c.apiGet(token, "/api/v1/products?tag=events&portable=1", 200, &products)
+	if len(products.Products) != 1 || products.Products[0].Total != 40 {
+		t.Errorf("products at events places = %+v", products)
+	}
+	c.apiGet(token, "/api/v1/products?place=99", 400, &e)
+	if e.Error != "place 99 doesn't exist" {
+		t.Errorf("error = %q", e.Error)
+	}
+
+	var product struct {
+		apiProductJSON
+		Items []apiItemJSON
+	}
+	c.apiGet(token, "/api/v1/products/1", 200, &product)
+	if product.Total != 100 || len(product.Items) != 2 || product.Items[0].Place.Path != "Main › Gym" || product.Items[1].Quantity != 40 {
+		t.Errorf("product = %+v", product)
+	}
+	c.apiGet(token, "/api/v1/products/99", 404, nil)
+
+	var items struct{ Items []apiItemJSON }
+	c.apiGet(token, "/api/v1/items?place=4&q=mic", 200, &items)
+	if len(items.Items) != 1 || items.Items[0].Name != "Lapel mics" || items.Items[0].Units != nil {
+		t.Errorf("items = %+v", items)
+	}
+	var item apiItemJSON
+	c.apiGet(token, "/api/v1/items/3", 200, &item)
+	if len(item.Units) != 2 || item.Units[1].ID != "Mic B" {
+		t.Errorf("mics = %+v", item)
+	}
+	var chairs apiItemJSON
+	c.apiGet(token, "/api/v1/items/1", 200, &chairs)
+	if !chairs.Counted || chairs.Units != nil {
+		t.Errorf("counted chairs = %+v", chairs)
+	}
+
+	var supplies struct{ Supplies []apiSupplyJSON }
+	c.apiGet(token, "/api/v1/supplies?q=table", 200, &supplies)
+	if len(supplies.Supplies) != 1 || supplies.Supplies[0].OnHand != 8 || supplies.Supplies[0].InUse != 2 || supplies.Supplies[0].Total != 10 {
+		t.Errorf("supplies = %+v", supplies)
+	}
+	var supply apiSupplyJSON
+	c.apiGet(token, "/api/v1/supplies/1", 200, &supply)
+	if supply.Name != "Tablecloths" || !supply.Reusable || supply.Stock != "ok" {
+		t.Errorf("supply = %+v", supply)
+	}
+
+	var places struct{ Places []apiPlaceJSON }
+	c.apiGet(token, "/api/v1/places", 200, &places)
+	if len(places.Places) != 4 || places.Places[0].ParentID != nil || *places.Places[2].ParentID != 2 {
+		t.Errorf("places = %+v", places)
+	}
+	c.apiGet(token, "/api/v1/places?tag=events", 200, &places)
+	if len(places.Places) != 1 || places.Places[0].Name != "Hall" || places.Places[0].Tags[0] != "events" {
+		t.Errorf("events places = %+v", places)
+	}
+	var place struct {
+		apiPlaceJSON
+		Children []int64
+		Items    []apiItemJSON
+		Supplies []apiSupplyJSON
+	}
+	c.apiGet(token, "/api/v1/places/2", 200, &place)
+	if len(place.Children) != 2 || len(place.Items) != 3 || len(place.Supplies) != 1 {
+		t.Errorf("place = %+v", place)
+	}
+	c.apiGet(token, "/api/v1/places/2?direct=1", 200, &place)
+	if len(place.Items) != 0 || len(place.Supplies) != 0 {
+		t.Errorf("only in the building itself = %+v", place)
+	}
+	c.apiGet(token, "/api/v1/nope", 404, nil)
+	if body := c.get("/admin/tokens", 200); strings.Contains(body, "Never") {
+		t.Error("using a token should record when")
+	}
+
+	// Revoked: refused from then on.
+	c.post("/admin/tokens", "/admin/tokens/1/delete", url.Values{}, 200)
+	c.apiGet(token, "/api/v1/products", 401, nil)
+}
+
+func TestQRStickersAndScanning(t *testing.T) {
+	c, st := newTestServer(t)
+	c.post("/setup", "/setup", url.Values{"username": {"admin"}, "display_name": {"Alex"}, "password": {"a long password"}, "password_confirm": {"a long password"}}, 200)
+	addPlaces(c, "building:Main", "room:2::Hall", "room:2::Gym") // places 2, 3, 4
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Lapel mics"}, "quantity": {"3"}, "portable": {"1"}, "unit_ids": {"Mic A, Mic B, Mic C"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"3"}, "name": {"Folding chairs"}, "quantity": {"40"}, "portable": {"1"}, "tracking": {"count"}}, 200)
+	c.post("/items/new", "/items", url.Values{"place_id": {"4"}, "name": {"Furnace"}}, 200)
+	c.post("/supplies/new", "/supplies", url.Values{"place_id": {"3"}, "name": {"Paper towels"}, "quantity": {"12"}, "reorder_at": {"2"}}, 200)
+
+	// A sticker per unit, carrying its ID; one for a counted or fixed item.
+	body := c.get("/items/1/qr", 200)
+	if strings.Count(body, `<svg class="qr"`) != 3 || !strings.Contains(body, c.base+"/report?item=1&amp;unit=Mic&#43;B") || !strings.Contains(body, "qr-sheet--small") {
+		t.Error("each mic should get a sticker with its ID")
+	}
+	if body := c.get("/items/2/qr", 200); strings.Count(body, `<svg class="qr"`) != 1 || !strings.Contains(body, c.base+"/report?item=2") {
+		t.Error("counted chairs get one code for the lot")
+	}
+	if body := c.get("/items/3/qr", 200); strings.Count(body, `<svg class="qr"`) != 1 || !strings.Contains(body, "Main › Gym") {
+		t.Error("a fixed item gets one code saying where it is")
+	}
+	if body := c.get("/products/1/qr", 200); strings.Count(body, `<svg class="qr"`) != 3 || !strings.Contains(body, "Reporting problems with items without signing in is off") {
+		t.Error("a product's sheet covers every one, and warns that visitors must sign in")
+	}
+
+	// Scanning a unit's code: the report is about that one.
+	body = c.get("/report?item=1&unit=Mic+B", 200)
+	if !strings.Contains(body, `<input type="hidden" name="unit" value="2">`) || !strings.Contains(body, `<span class="badge">ID Mic B</span>`) {
+		t.Error("the report form should be about Mic B")
+	}
+	c.post("/report?item=1&unit=Mic+B", "/report", url.Values{"fixed": {"1"}, "place_id": {"3"}, "item_id": {"1"}, "unit": {"2"}, "title": {"Crackles"}}, 200)
+	if p, _ := st.GetProblem(1); p.ItemID != 1 || p.Unit != 2 || p.UnitTag != "Mic B" {
+		t.Errorf("problem = %+v", p)
+	}
+	// After Mic B moves to the gym, its sticker still finds it.
+	c.post("/items/1/move", "/items/1/move", url.Values{"place_id": {"4"}, "moved_on": {"2026-03-01"}, "units": {"2"}}, 200)
+	if body := c.get("/report?item=1&unit=Mic+B", 200); !strings.Contains(body, `name="item_id" value="4"`) || !strings.Contains(body, "Main › Gym") {
+		t.Error("Mic B's sticker should follow it to the gym")
+	}
+	// A counted item has no units to name.
+	if body := c.get("/report?item=2&unit=1", 200); strings.Contains(body, `name="unit"`) {
+		t.Error("counted items have no unit to report")
+	}
+
+	// Places and items are opened to visitors separately.
+	c.post("/admin/settings", "/admin/settings", url.Values{"site_name": {"Main"}, "due_soon_days": {"30"}, "public_reports": {"1"}}, 200)
+	c.post("/", "/logout", url.Values{}, 200)
+	if body := c.get("/report?item=1&unit=Mic+A", 200); !strings.Contains(body, "Sign in") || strings.Contains(body, "Your name") {
+		t.Error("item reports are off, so an item's code asks visitors to sign in")
+	}
+	if body := c.get("/report?place=3", 200); !strings.Contains(body, "Your name") || strings.Contains(body, `name="item_id"`) {
+		t.Error("place reports are on, without items to pick")
+	}
+	c.post("/report?place=3", "/report", url.Values{"place_id": {"3"}, "item_id": {"1"}, "title": {"X"}, "reporter_name": {"Pat"}}, 200)
+	if _, err := st.GetProblem(2); err == nil {
+		t.Error("a visitor shouldn't be able to report an item while item reports are off")
+	}
+
+	c.post("/login", "/login", url.Values{"username": {"admin"}, "password": {"a long password"}}, 200)
+	c.post("/admin/settings", "/admin/settings", url.Values{"site_name": {"Main"}, "due_soon_days": {"30"}, "public_item_reports": {"1"}}, 200)
+	c.post("/", "/logout", url.Values{}, 200)
+	if body := c.get("/report?place=3", 200); !strings.Contains(body, "Sign in") || strings.Contains(body, "Your name") {
+		t.Error("place reports are off now")
+	}
+	body = c.get("/report?item=1&unit=Mic+A", 200)
+	if !strings.Contains(body, "Your name") || !strings.Contains(body, `<span class="badge">ID Mic A</span>`) || strings.Contains(body, "Something else here?") {
+		t.Error("item reports are on: visitors get the form for Mic A, and nothing else")
+	}
+	body = c.post("/report?item=1&unit=Mic+A", "/report", url.Values{"fixed": {"1"}, "place_id": {"3"}, "item_id": {"1"}, "unit": {"1"}, "title": {"Dead battery"}, "reporter_name": {"Pat"}}, 200)
+	if !strings.Contains(body, "Thanks!") || !strings.Contains(body, "<strong>Lapel mics</strong>") {
+		t.Error("visitors should be thanked, back on the item's form")
+	}
+	if p, _ := st.GetProblem(2); p.ReporterName != "Pat" || p.Unit != 1 {
+		t.Errorf("visitor's item report = %+v", p)
+	}
+	if body := c.get("/scan", 200); !strings.Contains(body, "Sign in") {
+		t.Error("scanning is for signed-in users")
+	}
+
+	// Supplies: a code to scan, and asking for more.
+	c.post("/login", "/login", url.Values{"username": {"admin"}, "password": {"a long password"}}, 200)
+	if body := c.get("/scan", 200); !strings.Contains(body, `data-controller="scan"`) {
+		t.Error("the scan page should load the scanner")
+	}
+	if body := c.get("/supplies/1/qr", 200); !strings.Contains(body, c.base+"/supplies/1") || !strings.Contains(body, "Scan to update the count or ask for more") {
+		t.Error("a supply's code should open its page")
+	}
+	if body := c.get("/supplies/qr?place=3", 200); strings.Count(body, `<svg class="qr"`) != 1 {
+		t.Error("the supplies sheet follows the filter")
+	}
+	body = c.post("/supplies/1", "/supplies/1/request", url.Values{"note": {"Before Sunday"}}, 200)
+	if !strings.Contains(body, "Asked for more Paper towels") || !strings.Contains(body, "Alex asked") || !strings.Contains(body, "Before Sunday") {
+		t.Error("asking for more should show who asked and why")
+	}
+	if body := c.get("/", 200); !strings.Contains(body, "Paper towels") || !strings.Contains(body, "More wanted") {
+		t.Error("the dashboard should list supplies people asked for")
+	}
+	c.post("/supplies/1", "/supplies/1/adjust", url.Values{"kind": {"restocked"}, "amount": {"6"}}, 200)
+	if sp, _ := st.GetSupply(1); sp.Requested() || sp.Quantity != 18 {
+		t.Errorf("restocking should clear the request: %+v", sp)
+	}
+	c.post("/supplies/1", "/supplies/1/request", url.Values{}, 200)
+	c.post("/supplies/1", "/supplies/1/request/cancel", url.Values{}, 200)
+	if sp, _ := st.GetSupply(1); sp.Requested() {
+		t.Error("the request should be cleared")
 	}
 }

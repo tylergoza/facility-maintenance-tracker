@@ -1,14 +1,17 @@
 {{define "content"}}
 <div class="page-head">
   <div><h1>Supplies</h1><p class="muted">Supplies on hand, in use and out for cleaning, everywhere.</p></div>
-  <a class="btn btn--primary" href="/supplies/new{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Add supply</a>
+  <div class="page-head__actions">
+    {{if .Supplies}}<a class="btn btn--ghost" href="/supplies/qr?{{.Query}}">QR codes for these</a>{{end}}
+    <a class="btn btn--primary" href="/supplies/new{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Add supply</a>
+  </div>
 </div>
 <form method="get" action="/supplies" class="toolbar" data-controller="autosubmit">
   <label class="sr-only" for="q">Search</label>
   <input id="q" type="search" name="q" value="{{.Filter.Query}}" placeholder="Search supplies, places…"
          data-action="input->autosubmit#debounced">
   {{template "place-filter" (dict "Places" .Places "Selected" .Filter.PlaceID "Tags" .Tags "Tag" .Filter.Tag)}}
-  <label class="check"><input type="checkbox" name="low" value="1" {{if .Filter.LowOnly}}checked{{end}} data-action="autosubmit#submit"> Low or out only</label>
+  <label class="check"><input type="checkbox" name="low" value="1" {{if .Filter.LowOnly}}checked{{end}} data-action="autosubmit#submit"> Low, out or wanted only</label>
   <noscript><button class="btn btn--sm">Filter</button></noscript>
 </form>
 {{if .Supplies}}

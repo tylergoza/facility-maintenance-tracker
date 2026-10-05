@@ -6,38 +6,48 @@
     <p>You need to <a href="/places/new">add a building</a> before adding items.</p>
   {{else}}
   <form method="post" action="{{if .Form.ID}}/items/{{.Form.ID}}{{else}}/items{{end}}" class="form"
-        data-controller="place-picker reveal" data-action="change->reveal#update">
+        data-controller="place-picker reveal product" data-action="change->reveal#update input->product#update">
     {{template "csrf" .CSRF}}
     <div class="field-row">
       <div class="field">
         <label for="name">Name</label>
-        <input id="name" name="name" value="{{.Form.Name}}" required autofocus list="item-names" placeholder="e.g. Furnace #2, Lights, Electrical outlets">
-        <datalist id="item-names">{{range .Names}}<option value="{{.}}">{{end}}</datalist>
+        <input id="name" name="name" value="{{.Form.Name}}" required autofocus list="item-names" maxlength="100" placeholder="e.g. Furnace #2, Lights, Folding chairs"
+               data-product-target="name">
+        <datalist id="item-names">
+          {{range .Products}}<option value="{{.Name}}" data-id="{{.ID}}" data-category="{{.Category}}" {{if .Counted}}data-counted="1"{{end}}>{{end}}
+          {{range .Names}}<option value="{{.}}">{{end}}
+        </datalist>
       </div>
       <div class="field field--narrow">
         <label for="quantity">How many</label>
         <input id="quantity" name="quantity" type="number" min="1" step="1" inputmode="numeric" value="{{.Form.Quantity}}" required>
       </div>
     </div>
-    <p class="hint">Count identical things together, like 10 outlets or 15 lights. Give something its own item if you want to track it separately.</p>
-    <div class="field">
-      <label for="unit_ids">IDs <span class="optional">optional</span></label>
-      <input id="unit_ids" name="unit_ids" value="{{.Form.UnitIDs}}" placeholder="e.g. Mic 1, Mic 2">
+    <p class="hint">Count identical things together, like 10 outlets or 15 lights. Things with the same name are one product and add up across places: 40 chairs here and 60 in the gym are 100 chairs. Give something a name of its own to keep it apart.</p>
+    <p class="hint" data-product-target="summary" hidden></p>
+    <div data-product-target="fields">
+      <div class="field">
+        <label for="category">Category <span class="optional">optional</span></label>
+        <input id="category" name="category" value="{{.Form.Category}}" list="categories" placeholder="e.g. HVAC, Plumbing, Safety, Audio/Visual, Furniture">
+        <datalist id="categories">
+          {{range .Categories}}<option value="{{.}}">{{end}}
+          <option value="HVAC"><option value="Plumbing"><option value="Electrical"><option value="Lighting"><option value="Safety"><option value="Audio/Visual"><option value="Furniture"><option value="Kitchen"><option value="Grounds"><option value="Roof"><option value="Instruments">
+        </datalist>
+      </div>
+      {{template "tracking-choice" .Form.Counted}}
     </div>
-    <p class="hint">What's on each one's sticker, in order, separated by commas. Leave it blank and they're numbered 1, 2, 3…; a portable item carries on from others with the same name, so a second set of Lapel mics starts after the first. Each keeps its ID wherever it moves.</p>
+    <div data-reveal-target="section" data-reveal-when="tracking=each">
+      <div class="field">
+        <label for="unit_ids">IDs <span class="optional">optional</span></label>
+        <input id="unit_ids" name="unit_ids" value="{{.Form.UnitIDs}}" placeholder="e.g. Mic 1, Mic 2">
+      </div>
+      <p class="hint">What's on each one's sticker, in order, separated by commas. Leave it blank and they're numbered 1, 2, 3…; a portable item carries on from others of the same product, so a second set of Lapel mics starts after the first. Each keeps its ID wherever it moves.</p>
+    </div>
     {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Where" "Required" true "Blank" "Choose…")}}
     <label class="check">
       <input type="checkbox" name="portable" value="1" {{if .Form.Portable}}checked{{end}}>
-      Portable: moves from place to place, like a projector or TV cart
+      Portable: moves from place to place, like a projector, TV cart or stack of chairs
     </label>
-    <div class="field">
-      <label for="category">Category <span class="optional">optional</span></label>
-      <input id="category" name="category" value="{{.Form.Category}}" list="categories" placeholder="e.g. HVAC, Plumbing, Safety, Audio/Visual">
-      <datalist id="categories">
-        {{range .Categories}}<option value="{{.}}">{{end}}
-        <option value="HVAC"><option value="Plumbing"><option value="Electrical"><option value="Lighting"><option value="Safety"><option value="Audio/Visual"><option value="Kitchen"><option value="Grounds"><option value="Roof"><option value="Instruments">
-      </datalist>
-    </div>
     <fieldset class="fieldset">
       <legend>Supply it uses</legend>
       <p class="hint">Something that gets replaced, like bulbs for lights or filters for air returns.</p>

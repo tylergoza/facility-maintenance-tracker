@@ -114,6 +114,15 @@ func seedDemo(st *store.Store) error {
 			{"Portable TV cart", "Audio/Visual", "Classroom 2", 1, "", 0, true},
 		},
 	}
+	// Furniture that's only counted, not numbered, and moves for events.
+	type furniture struct {
+		name, room string
+		quantity   int
+	}
+	furnitureItems := map[string][]furniture{
+		"Sanctuary":       {{"Folding chairs", "Worship Hall", 40}},
+		"Fellowship Hall": {{"Folding chairs", "Classroom 1", 24}, {"Folding chairs", "Classroom 2", 24}, {"Folding tables", "Classroom 2", 6}},
+	}
 	// Supplies the items above use that aren't in the supplies list yet.
 	newSupplies := map[string]store.Supply{
 		"LED BR30 bulbs":      {Unit: "bulbs", Quantity: 2, ReorderAt: 1},
@@ -221,6 +230,12 @@ func seedDemo(st *store.Store) error {
 			}
 			if sp != nil {
 				supplyIDs[c.supply] = sp.ID
+			}
+		}
+		for _, f := range furnitureItems[bd.name] {
+			i := &store.Item{PlaceID: rooms[f.room], Name: f.name, Category: "Furniture", Quantity: f.quantity, Portable: true, Counted: true}
+			if err := st.SaveItem(i, nil, 0); err != nil {
+				return err
 			}
 		}
 	}

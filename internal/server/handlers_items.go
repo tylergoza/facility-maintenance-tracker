@@ -104,6 +104,16 @@ func (s *Server) renderItemForm(w http.ResponseWriter, r *http.Request, status i
 		}
 	}
 	cats, _ := s.store.Categories()
+	products, err := s.store.ListProducts(store.ProductFilter{})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	// Suggest the products there are, then common things not yet added.
+	names := slices.Clone(commonItems)
+	names = slices.DeleteFunc(names, func(n string) bool {
+		return slices.ContainsFunc(products, func(p store.Product) bool { return strings.EqualFold(p.Name, n) })
+	})
 	if f.SupplySource == "" {
 		f.SupplySource = "none"
 		if f.SupplyID != 0 {
@@ -112,7 +122,7 @@ func (s *Server) renderItemForm(w http.ResponseWriter, r *http.Request, status i
 	}
 	s.render(w, r, status, "items/form", map[string]any{
 		"Title": title, "Form": f, "Places": tree.All(), "Supplies": supplies,
-		"Categories": cats, "Names": commonItems, "Errors": errs,
+		"Categories": cats, "Products": products, "Names": names, "Errors": errs,
 	})
 }
 
@@ -122,6 +132,7 @@ func (s *Server) itemFromForm(r *http.Request, f *itemForm) []string {
 	f.Manufacturer, f.Model, f.SerialNumber = formStr(r, "manufacturer"), formStr(r, "model"), formStr(r, "serial_number")
 	f.InstallDate, f.Notes = formStr(r, "install_date"), formStr(r, "notes")
 	f.Portable = r.PostFormValue("portable") == "1"
+	f.Counted = r.PostFormValue("tracking") == "count"
 	f.SupplySource = formStr(r, "supply_source")
 	var errs []string
 	if _, err := s.store.GetPlace(f.PlaceID); err != nil {
@@ -129,6 +140,13 @@ func (s *Server) itemFromForm(r *http.Request, f *itemForm) []string {
 	}
 	if f.Name == "" {
 		errs = append(errs, "Name is required.")
+	} else if msg := tooLong("Name", f.Name, 100); msg != nil {
+		errs = append(errs, msg...)
+	}
+	// A product it's already one of decides its category and counting.
+	f.ProductID = 0
+	if p, err := s.store.ProductByName(f.Name); err == nil {
+		f.ProductID, f.Name, f.Category, f.Counted = p.ID, p.Name, p.Category, p.Counted
 	}
 	var err error
 	f.Quantity = 1
@@ -185,6 +203,9 @@ func (s *Server) saveItem(r *http.Request, f *itemForm) error {
 
 func (s *Server) handleItemNew(w http.ResponseWriter, r *http.Request) {
 	f := itemForm{Item: store.Item{PlaceID: queryInt(r, "place"), Quantity: 1, SupplyPer: 1}}
+	if p, err := s.store.GetProduct(queryInt(r, "product")); err == nil {
+		f.ProductID, f.Name, f.Category, f.Counted = p.ID, p.Name, p.Category, p.Counted
+	}
 	s.renderItemForm(w, r, http.StatusOK, "Add item", f, nil)
 }
 
@@ -204,7 +225,7 @@ func (s *Server) handleItemCreate(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	if ids := parseUnitIDs(f.UnitIDs); ids != nil {
+	if ids := parseUnitIDs(f.UnitIDs); ids != nil && !f.Counted {
 		if err := s.store.SetUnitIDs(f.ID, f.Quantity, ids); err != nil {
 			s.serverError(w, r, err)
 			return
@@ -254,9 +275,12 @@ func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A single item has no units table, so its ID goes with its details
-	// when it's one that moves or has been given its own.
+	// when it's one that moves or has been given its own. Counted items
+	// have neither.
 	var onlyID string
-	if item.Quantity == 1 {
+	if item.Counted {
+		units = nil
+	} else if item.Quantity == 1 {
 		if item.Portable || units[0].Tagged() {
 			onlyID = units[0].ID()
 		}
@@ -268,8 +292,13 @@ func (s *Server) handleItemShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	crumbs := append(tree.Ancestors(item.PlaceID), item.Place)
+	product, err := s.store.GetProduct(item.ProductID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	s.render(w, r, http.StatusOK, "items/show", map[string]any{
-		"Title": item.Name, "Item": item, "Crumbs": crumbs, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies, "Problems": problems,
+		"Title": item.Name, "Item": item, "Product": product, "Crumbs": crumbs, "Tasks": active, "DoneTasks": done, "Logs": logs, "SuppliesUsed": supplies, "Problems": problems,
 		"Units": units, "OnlyID": onlyID, "FrequentReplacements": store.FrequentReplacements,
 	})
 }
@@ -321,7 +350,7 @@ func (s *Server) handleItemUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// IDs are only rewritten when the list was changed; otherwise new
 	// units are given theirs as the item is saved.
-	if ids := parseUnitIDs(f.UnitIDs); !slices.Equal(ids, parseUnitIDs(was)) {
+	if ids := parseUnitIDs(f.UnitIDs); !f.Counted && !slices.Equal(ids, parseUnitIDs(was)) {
 		if err := s.store.SetUnitIDs(item.ID, f.Quantity, ids); err != nil {
 			s.serverError(w, r, err)
 			return
@@ -372,7 +401,7 @@ func (s *Server) handleReplaceForm(w http.ResponseWriter, r *http.Request) {
 	if !item.SupplyShort() {
 		c.SupplyID = item.SupplyID
 	}
-	if u := int(queryInt(r, "unit")); u >= 1 && u <= item.Quantity && item.Quantity > 1 {
+	if u := int(queryInt(r, "unit")); u >= 1 && u <= item.Quantity && item.HasUnits() {
 		c.Units = []int{u}
 	}
 	s.renderReplaceForm(w, r, http.StatusOK, item, c, r.URL.Query().Get("next"), queryInt(r, "problem"), nil)
@@ -391,7 +420,7 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 	next, problemID := r.PostFormValue("next"), formInt(r, "problem")
 	user := currentUser(r)
 	c := store.Completion{ItemID: item.ID, Kind: "replaced", PerformedOn: formStr(r, "performed_on"), PerformedBy: user.Name(),
-		Notes: formStr(r, "notes"), UserID: user.ID, Units: formUnits(r, item.Quantity)}
+		Notes: formStr(r, "notes"), UserID: user.ID, Units: formUnits(r, item)}
 	var errs []string
 	if !validDate(c.PerformedOn) {
 		errs = append(errs, "Enter the date it was replaced.")
@@ -429,7 +458,7 @@ func (s *Server) handleReplace(w http.ResponseWriter, r *http.Request) {
 	if c.SupplyID != 0 {
 		if sp, err := s.store.GetSupply(item.SupplyID); err == nil {
 			msg += fmt.Sprintf(" %s on hand.", sp.QuantityLabel())
-			if sp.NeedsRestock() {
+			if sp.Stock() != "ok" {
 				msg += " Time to reorder."
 			}
 		}
@@ -473,7 +502,7 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	}
 	next := r.PostFormValue("next")
 	m := store.Move{ItemID: item.ID, PlaceID: formInt(r, "place_id"), MovedOn: formStr(r, "moved_on"), Note: formStr(r, "note"), UserID: currentUser(r).ID,
-		Units: formUnits(r, item.Quantity), Count: item.Quantity}
+		Units: formUnits(r, item), Count: item.Quantity}
 	var errs []string
 	if _, err := s.store.GetPlace(m.PlaceID); err != nil {
 		errs = append(errs, "Choose where it's moving to.")
@@ -523,11 +552,14 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 // Units -------------------------------------------------------------------
 
 // formUnits reads the "Which ones" checkboxes, dropping anything that
-// isn't a unit of an item with this many.
-func formUnits(r *http.Request, quantity int) []int {
+// isn't one of the item's units.
+func formUnits(r *http.Request, item *store.Item) []int {
+	if !item.HasUnits() {
+		return nil
+	}
 	var units []int
 	for _, v := range r.PostForm["units"] {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= quantity && !slices.Contains(units, n) {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= item.Quantity && !slices.Contains(units, n) {
 			units = append(units, n)
 		}
 	}
@@ -535,9 +567,10 @@ func formUnits(r *http.Request, quantity int) []int {
 	return units
 }
 
-// itemUnits returns a group item's units for pickers; nil for single items.
+// itemUnits returns a group item's units for pickers; nil for single and
+// counted items.
 func (s *Server) itemUnits(item *store.Item) ([]store.Unit, error) {
-	if item.Quantity < 2 {
+	if !item.HasUnits() {
 		return nil, nil
 	}
 	return s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
@@ -598,6 +631,9 @@ func checkUnitIDs(ids []string, quantity int, kind string, taken map[string]bool
 // its kind. was is the list as the form showed it; left alone, it only
 // needs to cover however many there are now.
 func (s *Server) checkItemUnitIDs(f *itemForm, was string) ([]string, error) {
+	if f.Counted {
+		return nil, nil
+	}
 	ids := parseUnitIDs(f.UnitIDs)
 	if slices.Equal(ids, parseUnitIDs(was)) && len(ids) > f.Quantity {
 		ids = ids[:f.Quantity]
@@ -611,6 +647,9 @@ func (s *Server) checkItemUnitIDs(f *itemForm, was string) ([]string, error) {
 
 // unitIDsField renders an item's unit IDs for the item form.
 func (s *Server) unitIDsField(item *store.Item) (string, error) {
+	if item.Counted {
+		return "", nil
+	}
 	units, err := s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
 	if err != nil {
 		return "", err
@@ -628,6 +667,11 @@ func (s *Server) handleUnitsForm(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	if item.Counted {
+		s.setFlash(w, r, "info", item.Name+" are only counted, so they don't have IDs or notes of their own.")
+		http.Redirect(w, r, fmt.Sprintf("/items/%d", item.ID), http.StatusSeeOther)
+		return
+	}
 	units, err := s.store.ItemUnits(item.ID, item.Quantity, s.todayTime())
 	if err != nil {
 		s.serverError(w, r, err)
@@ -640,6 +684,11 @@ func (s *Server) handleUnitsSave(w http.ResponseWriter, r *http.Request) {
 	item, err := s.store.GetItem(pathID(r))
 	if err != nil {
 		s.serverError(w, r, err)
+		return
+	}
+	if item.Counted {
+		s.setFlash(w, r, "info", item.Name+" are only counted, so they don't have IDs or notes of their own.")
+		http.Redirect(w, r, fmt.Sprintf("/items/%d", item.ID), http.StatusSeeOther)
 		return
 	}
 	units := make([]store.Unit, item.Quantity)

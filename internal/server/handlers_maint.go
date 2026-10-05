@@ -376,7 +376,7 @@ func (s *Server) handleTaskComplete(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	c := store.Completion{ItemID: t.ItemID, TaskID: t.ID, Units: formUnits(r, item.Quantity)}
+	c := store.Completion{ItemID: t.ItemID, TaskID: t.ID, Units: formUnits(r, item)}
 	next := r.PostFormValue("next")
 	errs := s.completionFromForm(r, &c)
 	if t.SupplyID != 0 && r.PostFormValue("took_supply") == "1" {
@@ -426,7 +426,7 @@ func (s *Server) handleLogNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := store.Completion{PerformedOn: s.today(), PerformedBy: currentUser(r).Name()}
-	if u := int(queryInt(r, "unit")); u >= 1 && u <= item.Quantity && item.Quantity > 1 {
+	if u := int(queryInt(r, "unit")); u >= 1 && u <= item.Quantity && item.HasUnits() {
 		c.Units = []int{u}
 	}
 	s.renderLogForm(w, r, http.StatusOK, item, c, queryInt(r, "problem"), nil)
@@ -438,7 +438,7 @@ func (s *Server) handleLogCreate(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	c := store.Completion{ItemID: item.ID, Units: formUnits(r, item.Quantity)}
+	c := store.Completion{ItemID: item.ID, Units: formUnits(r, item)}
 	problemID := formInt(r, "problem")
 	errs := s.completionFromForm(r, &c)
 	c.NextDueOn = ""
@@ -492,7 +492,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "settings", map[string]any{
-		"Title": "Settings", "SiteNameValue": s.SiteName(), "DueSoonDays": s.DueSoonDays(), "PublicReportsValue": s.PublicReports(), "Counts": counts,
+		"Title": "Settings", "SiteNameValue": s.SiteName(), "DueSoonDays": s.DueSoonDays(), "Counts": counts,
+		"PublicReportsValue": s.PublicReports(), "PublicItemReportsValue": s.PublicItemReports(),
 		"ReportURL": s.absURL(r, "/report"), "SiteURLValue": s.SiteURL(), "GuessedURL": s.guessedURL(r),
 	})
 }
@@ -515,7 +516,8 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		counts, _ := s.store.Counts()
 		s.render(w, r, http.StatusUnprocessableEntity, "settings", map[string]any{
 			"Title": "Settings", "SiteNameValue": name, "DueSoonDays": formStr(r, "due_soon_days"), "Counts": counts, "Errors": errs,
-			"PublicReportsValue": r.PostFormValue("public_reports") == "1", "ReportURL": s.absURL(r, "/report"),
+			"PublicReportsValue": r.PostFormValue("public_reports") == "1", "PublicItemReportsValue": r.PostFormValue("public_item_reports") == "1",
+			"ReportURL":    s.absURL(r, "/report"),
 			"SiteURLValue": formStr(r, "site_url"), "GuessedURL": s.guessedURL(r),
 		})
 		return
@@ -528,13 +530,15 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	public := "0"
-	if r.PostFormValue("public_reports") == "1" {
-		public = "1"
-	}
-	if err := s.store.SetSetting("public_reports", public); err != nil {
-		s.serverError(w, r, err)
-		return
+	for _, key := range []string{"public_reports", "public_item_reports"} {
+		on := "0"
+		if r.PostFormValue(key) == "1" {
+			on = "1"
+		}
+		if err := s.store.SetSetting(key, on); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 	}
 	if err := s.store.SetSetting("site_url", siteURL); err != nil {
 		s.serverError(w, r, err)

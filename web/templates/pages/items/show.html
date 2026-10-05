@@ -6,13 +6,16 @@
 <div class="page-head">
   <div>
     <h1>{{$i.Name}}{{if gt $i.Quantity 1}} <span class="muted">× {{$i.Quantity}}</span>{{end}}</h1>
-    <p class="muted">{{if $i.Category}}{{$i.Category}} · {{end}}{{$i.Location}}{{if $i.Portable}} · <span class="badge">Portable</span>{{end}}</p>
+    <p class="muted">{{if $i.Category}}{{$i.Category}} · {{end}}{{$i.Location}}{{if $i.Portable}} · <span class="badge">Portable</span>{{end}}{{if $i.Counted}} · <span class="badge">Counted</span>{{end}}</p>
+    {{if gt .Product.ItemCount 1}}<p class="small"><a href="/products/{{.Product.ID}}">{{.Product.Total}} {{.Product.Name}} in all</a> <span class="muted">across {{pluralize .Product.PlaceCount "place"}}</span></p>{{end}}
   </div>
   <div class="page-head__actions">
     {{if $i.SupplyID}}<a class="btn btn--primary btn--sm" href="/items/{{$i.ID}}/replace">Replace</a>{{end}}
     {{if $i.Portable}}<a class="btn btn--sm" href="/items/{{$i.ID}}/move">Move</a>{{end}}
     <a class="btn btn--sm" href="/report?item={{$i.ID}}">Report a problem</a>
     <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/edit">Edit</a>
+    <a class="btn btn--ghost btn--sm" href="/products/{{$i.ProductID}}">Product</a>
+    <a class="btn btn--ghost btn--sm" href="/items/{{$i.ID}}/qr">QR {{if and (not $i.Counted) (or (gt $i.Quantity 1) .OnlyID)}}stickers{{else}}code{{end}}</a>
     {{template "delete-button" (dict "Action" (printf "/items/%d/delete" $i.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s and all of its tasks and history?" $i.Name))}}
   </div>
 </div>

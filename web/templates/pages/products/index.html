@@ -1,0 +1,45 @@
+{{define "content"}}
+<div class="page-head">
+  <div><h1>Products</h1><p class="muted">What there is and how many, added up across every place it's kept.</p></div>
+  <a class="btn btn--ghost" href="/items{{if .Filter.PlaceID}}?place={{.Filter.PlaceID}}{{end}}">Items by place</a>
+</div>
+<form method="get" action="/products" class="toolbar" data-controller="autosubmit">
+  <label class="sr-only" for="q">Search</label>
+  <input id="q" type="search" name="q" value="{{.Filter.Query}}" placeholder="Search name, category, notes…"
+         data-action="input->autosubmit#debounced">
+  {{if .Categories}}
+    <label class="sr-only" for="category">Category</label>
+    <select id="category" name="category" data-action="autosubmit#submit">
+      <option value="">Any category</option>
+      {{range .Categories}}<option value="{{.}}" {{if eq . $.Filter.Category}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  {{end}}
+  {{template "place-filter" (dict "Places" .Places "Selected" .Filter.PlaceID "Tags" .Tags "Tag" .Filter.Tag)}}
+  <label class="check"><input type="checkbox" name="portable" value="1" {{if .Filter.PortableOnly}}checked{{end}} data-action="autosubmit#submit"> Portable only</label>
+  <noscript><button class="btn btn--sm">Filter</button></noscript>
+</form>
+{{if .Products}}
+  <div class="table-wrap">
+    <table class="table table--stack">
+      <thead><tr><th>Product</th><th>Category</th><th class="num">How many</th><th>Where</th></tr></thead>
+      <tbody>
+        {{range .Products}}
+          <tr>
+            <td data-label="Product"><div>
+              <a href="/products/{{.ID}}"><strong>{{.Name}}</strong></a>
+              {{if .Counted}}<span class="badge">Counted</span>{{end}}
+            </div></td>
+            <td data-label="Category">{{.Category}}</td>
+            <td data-label="How many" class="num"><span class="qty">{{.Total}}</span></td>
+            <td data-label="Where"><span class="muted small">{{pluralize .PlaceCount "place"}}</span></td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+{{else}}
+  <div class="empty">
+    {{if or .Filter.Query .Filter.PlaceID .Filter.Tag .Filter.Category .Filter.PortableOnly}}<p>No products match.</p>{{else}}<h2>No products yet</h2><p>Products come from items: add 40 folding chairs to one room and 60 to another, and Folding chairs shows 100.</p>{{end}}
+  </div>
+{{end}}
+{{end}}

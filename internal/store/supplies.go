@@ -35,7 +35,15 @@ type Supply struct {
 	Reusable bool
 	InUse    int // reusables only: currently in use, e.g. on a mop
 	Cleaning int // reusables only: out being washed
+	// Someone asked for more; cleared when it's restocked. RequestedAt
+	// is "" when nobody has.
+	RequestedAt string
+	RequestedBy string
+	RequestNote string
 }
+
+// Requested reports whether someone has asked for more.
+func (s Supply) Requested() bool { return s.RequestedAt != "" }
 
 // Total is every unit owned, wherever it is.
 func (s Supply) Total() int { return s.Quantity + s.InUse + s.Cleaning }
@@ -54,8 +62,9 @@ func (s Supply) Stock() string {
 	return "ok"
 }
 
-// NeedsRestock reports whether the supply is out or low.
-func (s Supply) NeedsRestock() bool { return s.Stock() != "ok" }
+// NeedsRestock reports whether the supply is out or low, or someone has
+// asked for more.
+func (s Supply) NeedsRestock() bool { return s.Stock() != "ok" || s.Requested() }
 
 // StockSummary renders the count for lists: "12 rolls", or for reusables
 // "3 clean · 2 in use · 1 cleaning" (zero buckets omitted).
@@ -85,13 +94,15 @@ type SupplyFilter struct {
 	PlaceID int64 // in this place or anywhere inside it
 	Direct  bool  // only supplies in PlaceID itself
 	Tag     string
-	LowOnly bool // only supplies that are out or at/below their reorder level
+	LowOnly bool // only supplies that are out, at/below their reorder level, or asked for
 	Query   string
 }
 
 const supplySelect = `
-	SELECT s.id, s.place_id, s.name, s.unit, s.quantity, s.reorder_at, s.notes, s.reusable, s.in_use, s.cleaning
-	FROM supplies s`
+	SELECT s.id, s.place_id, s.name, s.unit, s.quantity, s.reorder_at, s.notes, s.reusable, s.in_use, s.cleaning,
+	       COALESCE(s.requested_at, ''), COALESCE(NULLIF(u.display_name, ''), u.username, ''), s.request_note
+	FROM supplies s
+	LEFT JOIN users u ON u.id = s.requested_by`
 
 // scanSupplies reads supplies and fills in where they're kept, in tree
 // order then by name.
@@ -100,7 +111,8 @@ func (st *Store) scanSupplies(rows *sql.Rows) ([]Supply, error) {
 	var out []Supply
 	for rows.Next() {
 		var s Supply
-		if err := rows.Scan(&s.ID, &s.PlaceID, &s.Name, &s.Unit, &s.Quantity, &s.ReorderAt, &s.Notes, &s.Reusable, &s.InUse, &s.Cleaning); err != nil {
+		if err := rows.Scan(&s.ID, &s.PlaceID, &s.Name, &s.Unit, &s.Quantity, &s.ReorderAt, &s.Notes, &s.Reusable, &s.InUse, &s.Cleaning,
+			&s.RequestedAt, &s.RequestedBy, &s.RequestNote); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -128,7 +140,7 @@ func (s *Store) ListSupplies(f SupplyFilter) ([]Supply, error) {
 	var args []any
 	q, args = placeFilter(q, args, "s.place_id", f.PlaceID, f.Direct, f.Tag)
 	if f.LowOnly {
-		q += ` AND (s.quantity = 0 OR s.quantity <= s.reorder_at)`
+		q += ` AND (s.quantity = 0 OR s.quantity <= s.reorder_at OR s.requested_at IS NOT NULL)`
 	}
 	if f.Query != "" {
 		like := "%" + f.Query + "%"
@@ -211,6 +223,38 @@ func insertSupplyTx(tx *sql.Tx, sp *Supply, userID int64) error {
 	_, err = tx.Exec(`INSERT INTO supply_changes (supply_id, kind, amount, delta, quantity_after, in_use_after, cleaning_after, created_by)
 		VALUES (?, 'added', ?, ?, ?, ?, ?, ?)`,
 		sp.ID, sp.Total(), sp.Quantity, sp.Quantity, sp.InUse, sp.Cleaning, nullInt(userID))
+	return err
+}
+
+// RequestSupply notes that someone asked for more, replacing any earlier
+// request.
+func (s *Store) RequestSupply(id, userID int64, note string) error {
+	res, err := s.DB.Exec(`UPDATE supplies SET requested_at = datetime('now'), requested_by = ?, request_note = ? WHERE id = ?`,
+		nullInt(userID), strings.TrimSpace(note), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CancelSupplyRequest forgets that someone asked for more.
+func (s *Store) CancelSupplyRequest(id int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := clearRequestTx(tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func clearRequestTx(tx *sql.Tx, id int64) error {
+	_, err := tx.Exec(`UPDATE supplies SET requested_at = NULL, requested_by = NULL, request_note = '' WHERE id = ?`, id)
 	return err
 }
 
@@ -349,6 +393,11 @@ func adjustSupplyTx(tx *sql.Tx, a Adjustment) error {
 
 	if _, err := tx.Exec(`UPDATE supplies SET quantity = ?, in_use = ?, cleaning = ? WHERE id = ?`, stock, inUse, cleaning, a.SupplyID); err != nil {
 		return err
+	}
+	if a.Kind == "restocked" {
+		if err := clearRequestTx(tx, a.SupplyID); err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(`INSERT INTO supply_changes (supply_id, kind, amount, delta, quantity_after, in_use_after, cleaning_after, note, created_by, log_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

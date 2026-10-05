@@ -1,0 +1,61 @@
+{{define "content"}}
+<div class="page-head">
+  <div><h1>API tokens</h1><p class="muted">Let other apps, like an event or production planner, look up what there is and where. Tokens can only read; they can't change anything.</p></div>
+</div>
+
+{{if .NewToken}}
+<div class="card narrow">
+  <h2 class="section__title">Your new token</h2>
+  <p>Copy it now and keep it somewhere safe, like the other app's settings. It won't be shown again; if it's lost, revoke it and make another.</p>
+  <p><code class="token">{{.NewToken}}</code></p>
+  <p class="muted small">The app sends it with each request as <code>Authorization: Bearer {{.NewToken}}</code>.</p>
+</div>
+{{end}}
+
+{{if .Tokens}}
+<section class="section">
+<div class="table-wrap">
+  <table class="table table--stack">
+    <thead><tr><th>Used by</th><th>Token</th><th>Made</th><th>Last used</th><th><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>
+      {{range .Tokens}}
+        <tr>
+          <td data-label="Used by"><strong>{{.Name}}</strong></td>
+          <td data-label="Token"><code>{{.Prefix}}…</code></td>
+          <td data-label="Made"><span class="small">{{fmtTime .CreatedAt}}{{with .CreatedBy}} by {{.}}{{end}}</span></td>
+          <td data-label="Last used"><span class="small">{{if .LastUsedAt}}{{fmtTime .LastUsedAt}}{{else}}<span class="muted">Never</span>{{end}}</span></td>
+          <td class="actions">{{template "delete-button" (dict "Action" (printf "/admin/tokens/%d/delete" .ID) "CSRF" $.CSRF "Label" "Revoke" "Confirm" (printf "Revoke the token for %s? It will stop working right away." .Name))}}</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+</section>
+{{end}}
+
+<div class="card narrow">
+  <h2 class="section__title">Make a token</h2>
+  {{template "errors" .Errors}}
+  <form method="post" action="/admin/tokens" class="form">
+    {{template "csrf" .CSRF}}
+    <div class="field">
+      <label for="name">What will use it</label>
+      <input id="name" name="name" value="{{.Name}}" required maxlength="100" placeholder="e.g. Event planner">
+    </div>
+    <div class="form__actions"><button type="submit" class="btn btn--primary">Make token</button></div>
+  </form>
+</div>
+
+<div class="card narrow">
+  <h2 class="section__title">What it can read</h2>
+  <p class="muted small">JSON from <code>{{.APIBase}}</code>:</p>
+  <ul class="plain-list small">
+    <li><code>GET /products</code>: what there is and how many in all. Filter with <code>q</code>, <code>category</code>, <code>place</code>, <code>tag</code>, <code>portable=1</code>, <code>counted=1</code>; a place or tag totals only what's there.</li>
+    <li><code>GET /products/{id}</code>: a product and every item of it, with where each is.</li>
+    <li><code>GET /items</code>: items, by <code>q</code>, <code>place</code> (add <code>direct=1</code> for only that place), <code>tag</code>, <code>product</code>, <code>portable=1</code>.</li>
+    <li><code>GET /items/{id}</code>: an item, with its numbered units and their IDs unless it's only counted.</li>
+    <li><code>GET /supplies</code>, <code>GET /supplies/{id}</code>: supplies on hand, in use and out for cleaning; filter like items, plus <code>low=1</code>.</li>
+    <li><code>GET /places</code>, <code>GET /places/{id}</code>: the tree of places, and everything in one.</li>
+  </ul>
+</div>
+{{end}}

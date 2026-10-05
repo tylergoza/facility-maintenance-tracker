@@ -4,16 +4,23 @@
   <div class="page-head">
     <div>
       <h1>{{.Title}}</h1>
-      <p class="muted">Print and post where people will see it. Scanning opens "Report a problem" with the location filled in.</p>
+      {{if eq .Kind "supplies"}}
+        <p class="muted">Print and stick on the shelf or bin. Scanning opens the supply's page, to take some, recount, restock or ask for more. Only signed-in users can use them; anyone else is asked to sign in.</p>
+      {{else if eq .Kind "items"}}
+        <p class="muted">Print on sticker paper and put each on the thing itself. Scanning opens "Report a problem" for it; a unit's sticker finds it wherever it's moved, as long as it keeps its ID.</p>
+      {{else}}
+        <p class="muted">Print and post where people will see it. Scanning opens "Report a problem" with the location filled in.</p>
+      {{end}}
+      <p class="muted small">Signed-in users can also scan any of these from the <a href="/scan">Scan</a> page.</p>
     </div>
     <div class="page-head__actions">
       <button type="button" class="btn btn--primary" data-controller="print" data-action="print#print">Print</button>
     </div>
   </div>
-  {{if not .PublicReports}}
+  {{if or (and (eq .Kind "places") (not .PublicReports)) (and (eq .Kind "items") (not .PublicItemReports))}}
     <div class="alert alert--error" role="status">
-      Public reporting is off, so people who scan these will be asked to sign in.
-      {{if .User.IsAdmin}}<a href="/admin/settings">Turn it on in Settings</a>.{{else}}Ask an admin to turn it on.{{end}}
+      Reporting problems with {{.Kind}} without signing in is off, so people who scan these will be asked to sign in.
+      {{if .User.IsAdmin}}<a href="/admin/settings">Turn it on in Settings</a> if anyone should be able to.{{else}}Ask an admin if anyone should be able to.{{end}}
     </div>
   {{end}}
   {{if not .SiteURLSet}}
@@ -21,16 +28,20 @@
       {{if .User.IsAdmin}}<a href="/admin/settings">set the site address</a>{{else}}ask an admin to set the site address{{end}} before printing.</p>
   {{end}}
 </div>
-<div class="qr-sheet">
+{{if .Cards}}
+<div class="qr-sheet{{if .Small}} qr-sheet--small{{end}}">
   {{range .Cards}}
     <div class="qr-card">
-      <p class="qr-card__lead">Something wrong here?</p>
+      <p class="qr-card__lead">{{.Lead}}</p>
       {{.SVG}}
       <p class="qr-card__title">{{.Title}}</p>
-      <p class="qr-card__sub">{{.Subtitle}}</p>
-      <p class="qr-card__cta">Scan to report a problem</p>
+      {{with .Subtitle}}<p class="qr-card__sub">{{.}}</p>{{end}}
+      <p class="qr-card__cta">{{.CTA}}</p>
       <p class="qr-card__url">{{.URL}}</p>
     </div>
   {{end}}
 </div>
+{{else}}
+  <p class="empty">Nothing to print.</p>
+{{end}}
 {{end}}

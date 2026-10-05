@@ -32,12 +32,14 @@ To run in production, see [Deploying](#deploying).
 |------|--------------|
 | Dashboard (`/`, public) | Status tiles (Overdue / Due soon / Upcoming / Not scheduled), per-building health, search and status filters (kept in the URL hash), and a filter for any building, floor or area. Works offline once visited. |
 | Places | Sites hold buildings. Buildings hold floors, rooms and areas. Floors hold rooms and areas; rooms hold areas; areas hold floors, rooms and other areas, and can also go straight on a site. So floors are optional, outside spaces (a porch, a playground) are areas, a wing is an area holding rooms, and a stage is an area in a room. A shared area, like a stairwell between two floors or a balcony off two rooms, lives in one place (which gives it its name) and is also in the others: it's listed in each, and its problems and items count there, once. With one site (the usual case) it's created for you and never asked about. A place's page shows what's in it and rolls up problems, supplies and tasks from everything inside; moving a place takes its contents along; deleting one moves its contents up a level (it says so if something inside can't go there, like a room in an area on the site). Optional tags (e.g. "classrooms", "media") group places across buildings, with a page per tag and tag filters on Items, Supplies and Problems. Add places one at a time or paste a list. Links and QR codes from before places (`/rooms/3`, `/report?room=3`) still work. |
-| Items | Items belong to a place at any level (a mailbox on the site, AC units on a building, lights on a porch). An item can count a group of identical things (10 outlets, 15 lights) and use a supply that gets replaced (1 bulb or filter each); "Replace" records it and takes it from stock. A group's units are numbered #1, #2… (with optional location notes) so Replace, "Mark done" and other work can record which ones. Every unit also has an ID, what's on its sticker, which stays with it through moves even when its number changes. IDs start out as the unit's number and can be changed when the item is added or later. They're unique within a kind: all portable items with the same name share one list, so Lapel mics and Handheld mics can each have a 1, and a second set of Lapel mics carries on from the first; anything that isn't portable has a list of its own. Units replaced 3 or more times in a year are flagged. Portable items (projectors, TV carts, chairs) have "Move", and every change of location is kept in their history. A group can move only some of its units (tick which ones, or say how many): they join a matching item already at the new place, or become a new one there with copies of its tasks, and those left behind are renumbered from #1, keeping their IDs, notes, history and problems. Place pages group items by category. |
+| Items | Items belong to a place at any level (a mailbox on the site, AC units on a building, lights on a porch). An item can count a group of identical things (10 outlets, 15 lights) and use a supply that gets replaced (1 bulb or filter each); "Replace" records it and takes it from stock. A group's units are numbered #1, #2… (with optional location notes) so Replace, "Mark done" and other work can record which ones. Every unit also has an ID, what's on its sticker, which stays with it through moves even when its number changes. IDs start out as the unit's number and can be changed when the item is added or later. They're unique within a kind: all portable items of the same product share one list, so Lapel mics and Handheld mics can each have a 1, and a second set of Lapel mics carries on from the first; anything that isn't portable has a list of its own. Units replaced 3 or more times in a year are flagged. Portable items (projectors, TV carts, chairs) have "Move", and every change of location is kept in their history. A group can move only some of its units (tick which ones, or say how many): they join a matching item already at the new place, or become a new one there with copies of its tasks, and those left behind are renumbered from #1, keeping their IDs, notes, history and problems. Place pages group items by category. |
+| Products | An item's name picks its product, so the same thing in many places adds up: 40 folding chairs in the hall and 60 in the gym are one product, Folding chairs, with 100 in all. The Products page totals each one, everywhere or in one place or tag. A product holds the category, notes and how its items are kept: one by one (numbered units with IDs, as above) or only counted, for things like chairs and tables that don't need numbers of their own. Counted items move by count and have no unit pickers. Rename a product, or switch how it's kept, from its page; two products that are really one thing can be merged. Products are added and removed with their items. |
 | Tasks | One-time or recurring (every N days/weeks/months/years). "Next due" is calculated from "last done" or set by hand. Month math clamps (Jan 31 + 1 month = Feb 28). |
 | Mark done | Logs date, who, cost and notes, then rolls the task forward. Back-dated entries never move the schedule backwards. One-time tasks close. |
 | History | Per-item and site-wide maintenance logs, including ad-hoc "other work". |
 | Supplies | Counts of things that get used up (paper towels, filters, bulbs) or washed and reused (mop heads), with a history of every change and low-stock flags. Tasks can take a supply each time they're done. |
-| Problems | Report a problem against a place or an item in it; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report at `/report` without signing in (off by default, 10 reports an hour per device, with a honeypot field for bots). Any place's page prints a QR code that opens the report form for it, or a sheet of codes for everything inside it. |
+| Problems | Report a problem against a place or an item in it; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report without signing in, separately for places and for items (both off by default; 10 reports an hour per device, with a honeypot field for bots); otherwise scanning a code asks people to sign in first. Any place's page prints a QR code that opens the report form for it, or a sheet of codes for everything inside it. |
+| QR codes and scanning | Items print stickers from their page (or a product's, for every one of it): one per unit, carrying the ID on its sticker, so scanning reports a problem with that exact one and still finds it after it moves; counted and plain fixed items get one code each. Supplies print a code for their shelf or bin (one, or a sheet for the supplies listed) that opens the supply's page to take some, recount, restock or "Ask for more". Asking flags it on the dashboard and Supplies page until it's restocked. Signed-in users can scan any of these from **Scan** with the phone's camera (the browser's QR reader where there is one, otherwise the bundled [jsQR](https://github.com/cozmo/jsQR), Apache 2.0); the camera needs https. A phone's own camera app works too. |
 | Users | Admins manage users, settings (site name, site address, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
 
 ## Stimulus autoloader
@@ -263,12 +265,37 @@ On any machine with the binary (`make build` builds one for the current OS):
 Copying the live `.db` while the app runs can miss data held in the `-wal`
 file. Use the backup command or button, or stop the app first.
 
+## API
+
+Other apps, like an event or production planner, can read what there is and
+where. An admin makes a token per app on the **API** page (it's shown once),
+and the app sends it with each request:
+
+```sh
+curl -H "Authorization: Bearer mt_…" https://maintenance.example.org/api/v1/products?tag=events&portable=1
+```
+
+Everything is read-only JSON under `/api/v1/`:
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /products` | Products with `total`, `item_count`, `place_count`. Filters: `q`, `category`, `place`, `tag`, `portable=1`, `counted=1`; a place or tag totals only what's there. |
+| `GET /products/{id}` | A product and its `items`, each with its place. |
+| `GET /items` | Items. Filters: `q`, `place` (with `direct=1` for only that place, not inside it), `tag`, `product`, `portable=1`. |
+| `GET /items/{id}` | An item, with its `units` (number, ID, note) unless it's counted. |
+| `GET /supplies`, `GET /supplies/{id}` | Supplies with `on_hand`, `in_use`, `cleaning`, `total`, `stock` (`ok`, `low`, `out`) and `requested` (when someone asked for more, or `null`). Filters as for items, plus `low=1` (low, out or asked for). |
+| `GET /places`, `GET /places/{id}` | Places in tree order (`parent_id`, `kind`, `path`, `tags`, `also_in`); one place adds its `children` and the `items` and `supplies` in it (or `direct=1`). |
+
+Errors come back as `{"error": "…"}`: 401 for a missing or revoked token, 400
+for a place that doesn't exist, 404 for anything else not found.
+
 ## Security notes
 
 - Passwords are bcrypt-hashed. Sessions are random tokens stored server-side, in `HttpOnly`, `SameSite=Lax` cookies (`Secure` over HTTPS).
 - CSRF uses a double-submit token on every POST. Logins are limited to 10 failures per IP per 15 minutes.
 - A strict CSP (`script-src 'self'` + import-map hash) is set, along with `X-Frame-Options`, `nosniff` and HSTS over HTTPS.
 - Changing a password signs out that user's other sessions.
+- API tokens are stored as SHA-256 hashes and can only read. The API takes only tokens, never session cookies, so it needs no CSRF check.
 
 ## Layout
 
@@ -288,7 +315,8 @@ make test
 ```
 
 These cover the scheduling rules, sessions, CSRF, login rate limiting,
-supplies, counted items and units, moves, problem reports (including public
+supplies, counted items and units, products (merging, switching to counted,
+the migration), moves, the API and its tokens, problem reports (including public
 reporting and its rate limit), site address and QR codes, and an end-to-end flow
 that renders every page.
 
