@@ -1,4 +1,5 @@
-# Managed by deploy/ansible; edits here are overwritten on the next deploy.
+# /etc/caddy/sites/maintenance-tracker.caddy, managed by the maintenance tracker's
+# deploy/ansible; edits here are overwritten on the next deploy.
 {{ app_domain }} {
 	encode gzip
 	reverse_proxy 127.0.0.1:8080

@@ -1,5 +1,5 @@
 # Tests and builds the Linux binary on this machine, then installs it, the
-# systemd unit and the Caddyfile on every droplet tagged do_tag. The database
+# systemd unit and its Caddy site on every droplet tagged do_tag. The database
 # is backed up first whenever the binary changes (migrations run on start).
 #
 #   export DIGITALOCEAN_TOKEN=...
@@ -111,9 +111,30 @@
         mode: "0644"
       notify: Restart the app
 
-    - name: Install the Caddyfile
+    # The droplet can be shared with the production planner: each app puts
+    # its own site in /etc/caddy/sites/ and the main Caddyfile (the same in
+    # both repos) imports them all.
+    - name: Create the Caddy sites folder
+      ansible.builtin.file:
+        path: /etc/caddy/sites
+        state: directory
+        mode: "0755"
+
+    # Before the main file, so its import never finds an empty folder.
+    - name: Install this app's Caddy site
       ansible.builtin.template:
         src: Caddyfile.j2
+        dest: /etc/caddy/sites/maintenance-tracker.caddy
+        mode: "0644"
+        validate: caddy validate --adapter caddyfile --config %s
+      notify: Reload Caddy
+
+    - name: Install the main Caddyfile
+      ansible.builtin.copy:
+        content: |
+          # Managed by deploy/ansible in each app's repo; edits here are overwritten.
+          # Each app puts its own site in /etc/caddy/sites/.
+          import /etc/caddy/sites/*.caddy
         dest: /etc/caddy/Caddyfile
         mode: "0644"
         validate: caddy validate --adapter caddyfile --config %s

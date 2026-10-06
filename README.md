@@ -206,10 +206,19 @@ installs updates, Caddy and the service user, and runs the deploy. Running it
 again leaves existing resources alone.
 
 `make deploy` runs the tests, builds `bin/maintenance-tracker-linux-amd64`
-here, and installs it with `deploy/maintenance-tracker.service` and a Caddyfile
-for your domain. When the binary changes, it backs up the database to
+here, and installs it with `deploy/maintenance-tracker.service` and a Caddy
+site for your domain. When the binary changes, it backs up the database to
 `/var/lib/maintenance-tracker/backups/` first and keeps the last 10 backups.
 The deploy fails if the app doesn't answer `/healthz` afterwards.
+
+The droplet can also host the
+[production planner](../production_planning): its deploy finds this droplet by
+its tag and adds itself alongside, with its own Caddy site in
+`/etc/caddy/sites/production-planner.caddy`. Caddy's config is split so both
+apps can deploy without overwriting each other: `/etc/caddy/Caddyfile` only
+imports `/etc/caddy/sites/*.caddy`, and each app writes its own site file
+there (this one's is `/etc/caddy/sites/maintenance-tracker.caddy`). Both repos
+write the same main Caddyfile, so it doesn't matter which deploys last.
 
 On the first deploy, the admin user is created before the app starts, so
 `/setup` is never exposed. Set `MT_ADMIN_PASSWORD` to choose its password, or
