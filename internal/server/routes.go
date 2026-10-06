@@ -19,6 +19,7 @@ func (s *Server) routes() http.Handler {
 		http.Redirect(w, r, s.asset("icons/icon.svg"), http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("GET /offline", s.handleOffline)
+	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.DB.PingContext(r.Context()); err != nil {
 			http.Error(w, "db unavailable", http.StatusServiceUnavailable)
@@ -142,7 +143,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("/", s.notFound)
 
-	return s.logRequests(s.securityHeaders(s.loadSession(s.csrf(mux))))
+	return s.logRequests(s.securityHeaders(s.loadSession(s.csrf(s.announceChanges(mux)))))
 }
 
 // Middleware -------------------------------------------------------------
@@ -174,6 +175,9 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController reach Flush and write deadlines.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -62,6 +62,7 @@ type Server struct {
 
 	limiter       *loginLimiter
 	reportLimiter *loginLimiter // public problem reports per IP
+	live          *hub
 	handler       http.Handler
 }
 
@@ -69,7 +70,7 @@ func New(cfg Config, st *store.Store, logger *slog.Logger) (*Server, error) {
 	if cfg.SessionTTL == 0 {
 		cfg.SessionTTL = 30 * 24 * time.Hour
 	}
-	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute), reportLimiter: newLoginLimiter(10, time.Hour)}
+	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute), reportLimiter: newLoginLimiter(10, time.Hour), live: newHub()}
 	if cfg.Dev {
 		s.webFS = os.DirFS("web")
 	} else {
@@ -261,8 +262,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 	data["AssetVersion"] = s.assetVersion
 	data["Path"] = r.URL.Path
 	data["URI"] = r.URL.RequestURI()
-	if f := s.popFlash(w, r); f != nil {
-		data["Flash"] = f
+	// A live page refreshing itself leaves any flash for the next real visit.
+	if r.Header.Get("X-Live-Refresh") == "" {
+		if f := s.popFlash(w, r); f != nil {
+			data["Flash"] = f
+		}
 	}
 	if _, ok := data["Title"]; !ok {
 		data["Title"] = ""

@@ -61,7 +61,7 @@
         </div>
       </dl>
       {{if $t.Description}}
-        <details class="task-card__details">
+        <details class="task-card__details" data-live-key="task-{{$t.ID}}">
           <summary>Instructions</summary>
           {{range lines $t.Description}}<p>{{.}}</p>{{end}}
         </details>
