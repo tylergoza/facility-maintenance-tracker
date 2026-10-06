@@ -706,6 +706,39 @@ func TestUnits(t *testing.T) {
 		t.Errorf("problem 2 should be resolved: %+v", p)
 	}
 
+	// Reporting one unit: picked on the report form, from the item's page,
+	// or from its report link; leaving it out reports the group.
+	if body := c.get("/report", 200); !strings.Contains(body, `<option value="3" data-item="1" >#3 – Over the stage</option>`) {
+		t.Error("report form should offer the item's units")
+	}
+	if body := c.get("/report?item=1", 200); !strings.Contains(body, `<option value="4" >#4</option>`) {
+		t.Error("an item's report form should ask which one")
+	}
+	if !strings.Contains(c.get("/items/1", 200), `href="/report?item=1&amp;unit=3"`) {
+		t.Error("each unit should have a report link")
+	}
+	c.post("/report", "/report", url.Values{"place_id": {"3"}, "item_id": {"1"}, "unit": {"4"}, "title": {"Flickers"}}, 200)
+	c.post("/report", "/report", url.Values{"place_id": {"3"}, "item_id": {"1"}, "unit": {"0"}, "title": {"Two are out"}}, 200)
+	c.post("/report", "/report", url.Values{"place_id": {"3"}, "item_id": {"1"}, "unit": {"9"}, "title": {"Bad unit"}}, 200)
+	for id, want := range map[int64]int{3: 4, 4: 0, 5: 0} {
+		if p, _ := st.GetProblem(id); p.Unit != want {
+			t.Errorf("problem %d unit = %d, want %d", id, p.Unit, want)
+		}
+	}
+	// Editing can say which one, noted in the timeline, or change its mind.
+	edit := url.Values{"place_id": {"3"}, "item_id": {"1"}, "unit": {"2"}, "title": {"Two are out"}, "reporter_name": {"Alex"}}
+	if body := c.post("/problems/4/edit", "/problems/4", edit, 200); !strings.Contains(body, "It&#39;s #2.") {
+		t.Error("choosing the unit on edit should show in the timeline")
+	}
+	if !strings.Contains(c.get("/problems/4/edit", 200), `<option value="2" data-item="1" selected>#2</option>`) {
+		t.Error("edit form should show the chosen unit")
+	}
+	edit.Set("unit", "0")
+	c.post("/problems/4/edit", "/problems/4", edit, 200)
+	if p, _ := st.GetProblem(4); p.Unit != 0 {
+		t.Errorf("clearing the unit on edit: %d", p.Unit)
+	}
+
 	// Fewer units: #3 and #4 drop out of pickers, their history stays.
 	c.post("/items/1/edit", "/items/1", url.Values{"place_id": {"3"}, "name": {"Lights"}, "quantity": {"2"},
 		"supply_source": {"existing"}, "supply_id": {"1"}, "supply_per": {"1"}}, 200)

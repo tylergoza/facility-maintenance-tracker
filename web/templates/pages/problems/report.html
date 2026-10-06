@@ -22,16 +22,26 @@
         <p class="muted small">{{.Location}}{{if $.User}} · <a href="/items/{{.ID}}">Open its page</a>{{end}}</p>
         {{if $.PlacesOpen}}<p class="small"><a href="/report?place={{.PlaceID}}">Something else here?</a></p>{{end}}
       </div>
+      {{with $.FixedUnits}}
+        <div class="field">
+          <label for="unit">Which one? <span class="optional">optional</span></label>
+          <select id="unit" name="unit">
+            <option value="0">— Not sure, or more than one —</option>
+            {{range .}}<option value="{{.Number}}" {{if eq .Number $.Form.Unit}}selected{{end}}>{{.Name}}</option>{{end}}
+          </select>
+        </div>
+      {{end}}
     {{else}}
       {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Where is it?" "Required" true "Blank" "Choose…")}}
       {{if .ItemsOpen}}
       <div class="field">
         <label for="item_id">What's it about? <span class="optional">optional</span></label>
-        <select id="item_id" name="item_id" data-place-picker-target="item">
+        <select id="item_id" name="item_id" data-place-picker-target="item" data-action="place-picker#itemChanged">
           <option value="">— Nothing specific / not sure —</option>
           {{range .Items}}<option value="{{.ID}}" data-lineage="{{.Lineage}}" {{if eq .ID $.Form.ItemID}}selected{{end}}>{{.Label}}</option>{{end}}
         </select>
       </div>
+      {{template "unit-select" (dict "Items" .Items "Selected" .Form.Unit)}}
       {{end}}
     {{end}}
     <div class="field">

@@ -462,7 +462,8 @@ func (s *Server) handleLegacy(room bool) http.HandlerFunc {
 type itemOption struct {
 	ID      int64
 	Label   string
-	Lineage string // "12 4 1": its place and every place that's in
+	Lineage string       // "12 4 1": its place and every place that's in
+	Units   []store.Unit // to say which one, on problem forms
 }
 
 func itemOptions(tree *store.Places, items []store.Item) []itemOption {

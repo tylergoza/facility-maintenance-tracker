@@ -11,11 +11,12 @@
     {{template "place-select" (dict "Name" "place_id" "Places" .Places "Selected" .Form.PlaceID "Label" "Where" "Required" true "Blank" "Choose…")}}
     <div class="field">
       <label for="item_id">What's it about? <span class="optional">optional</span></label>
-      <select id="item_id" name="item_id" data-place-picker-target="item">
+      <select id="item_id" name="item_id" data-place-picker-target="item" data-action="place-picker#itemChanged">
         <option value="">— Nothing specific / not sure —</option>
         {{range .Items}}<option value="{{.ID}}" data-lineage="{{.Lineage}}" {{if eq .ID $.Form.ItemID}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
     </div>
+    {{template "unit-select" (dict "Items" .Items "Selected" .Form.Unit)}}
     <div class="field">
       <label for="details">Details <span class="optional">optional</span></label>
       <textarea id="details" name="details" rows="4" maxlength="5000">{{.Form.Details}}</textarea>

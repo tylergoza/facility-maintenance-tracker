@@ -125,6 +125,42 @@ func (s *Store) ItemUnits(itemID int64, quantity int, today time.Time) ([]Unit, 
 	return units, rows.Err()
 }
 
+// UnitsOf returns the units of each item that has them, keyed by item,
+// with their IDs and notes but not their history: enough to pick one.
+func (s *Store) UnitsOf(items []Item) (map[int64][]Unit, error) {
+	out := map[int64][]Unit{}
+	for _, it := range items {
+		if !it.HasUnits() {
+			continue
+		}
+		units := make([]Unit, it.Quantity)
+		for i := range units {
+			units[i].Number = i + 1
+		}
+		out[it.ID] = units
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	rows, err := s.DB.Query(`SELECT item_id, number, tag, label FROM item_units`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var itemID int64
+		var n int
+		var tag, label string
+		if err := rows.Scan(&itemID, &n, &tag, &label); err != nil {
+			return nil, err
+		}
+		if units := out[itemID]; n >= 1 && n <= len(units) {
+			units[n-1].Tag, units[n-1].Label = tag, label
+		}
+	}
+	return out, rows.Err()
+}
+
 // SaveUnits replaces an item's unit IDs and notes. Units without an ID
 // are given one.
 func (s *Store) SaveUnits(itemID int64, units []Unit) error {

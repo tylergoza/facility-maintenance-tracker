@@ -45,7 +45,8 @@ func (s *Server) absURL(r *http.Request, path string) string {
 // Reporting ----------------------------------------------------------------
 
 // problemFormData loads what the report and edit forms pick from: places,
-// and items (narrowed to the chosen place in the browser).
+// items (narrowed to the chosen place in the browser), and their units
+// (narrowed to the chosen item).
 func (s *Server) problemFormData() (map[string]any, error) {
 	tree, err := s.store.Places()
 	if err != nil {
@@ -55,12 +56,21 @@ func (s *Server) problemFormData() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"Places": tree.All(), "Items": itemOptions(tree, items)}, nil
+	units, err := s.store.UnitsOf(items)
+	if err != nil {
+		return nil, err
+	}
+	options := itemOptions(tree, items)
+	for i := range options {
+		options[i].Units = units[options[i].ID]
+	}
+	return map[string]any{"Places": tree.All(), "Items": options}, nil
 }
 
 // renderReportForm shows the report form. fixed means it came from a
-// link or QR code for one item (and maybe one of its units), which is
-// shown instead of the place and item pickers.
+// link or QR code for one item, which is shown instead of the place and
+// item pickers. A unit's code names the unit too; otherwise the item's
+// units are offered to pick from.
 func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status int, p store.Problem, fixed bool, errs []string) {
 	data, err := s.problemFormData()
 	if err != nil {
@@ -73,15 +83,15 @@ func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status
 	data["PlacesOpen"] = signedIn || s.PublicReports()
 	if item, err := s.store.GetItem(p.ItemID); fixed && err == nil {
 		data["Fixed"] = item
-		if p.Unit != 0 {
-			units, err := s.itemUnits(item)
-			if err != nil {
-				s.serverError(w, r, err)
-				return
-			}
-			if p.Unit <= len(units) {
-				data["FixedUnit"] = units[p.Unit-1]
-			}
+		units, err := s.itemUnits(item)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		if p.Unit >= 1 && p.Unit <= len(units) && r.Method == http.MethodGet {
+			data["FixedUnit"] = units[p.Unit-1]
+		} else {
+			data["FixedUnits"] = units
 		}
 	}
 	s.render(w, r, status, "problems/report", data)
@@ -90,7 +100,7 @@ func (s *Server) renderReportForm(w http.ResponseWriter, r *http.Request, status
 // problemFromForm reads what and where. Reporter fields are only read for
 // people who aren't signed in.
 func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter bool) []string {
-	p.PlaceID, p.ItemID = formInt(r, "place_id"), formInt(r, "item_id")
+	p.PlaceID, p.ItemID, p.Unit = formInt(r, "place_id"), formInt(r, "item_id"), 0
 	p.Title, p.Details = formStr(r, "title"), formStr(r, "details")
 	var errs []string
 	tree, err := s.store.Places()
@@ -120,7 +130,8 @@ func (s *Server) problemFromForm(r *http.Request, p *store.Problem, reporter boo
 			errs = append(errs, "That item isn't in the place you chose.")
 		default:
 			p.ItemName, p.PlaceID = item.Name, item.PlaceID
-			// Which one, from a unit's QR code; dropped if it's no longer one.
+			// Which one, picked or from a unit's QR code; dropped if it's
+			// no longer one. Not saying means the group, or not sure which.
 			if u := int(formInt(r, "unit")); item.HasUnits() && u >= 1 && u <= item.Quantity {
 				p.Unit = u
 			}
@@ -297,6 +308,12 @@ func (s *Server) handleProblemSave(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SaveProblemDetails(p); err != nil {
 		s.serverError(w, r, err)
 		return
+	}
+	if p.ItemID != 0 {
+		if err := s.store.SetProblemUnit(p.ID, p.Unit, currentUser(r).ID); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 	}
 	s.redirect(w, r, fmt.Sprintf("/problems/%d", p.ID), "Problem updated.")
 }

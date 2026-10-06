@@ -317,6 +317,22 @@
   the list once there are many. The form needs data-controller="place-picker".
   dict "Name" field "Places" []Place "Selected" id "Label" text "Blank" text-for-no-choice "Required" bool
 */}}
+{{/*
+  "Which one?" on problem forms, for items with numbered units. Leaving it
+  on the first choice reports the group: not sure which, or more than one.
+  Takes dict "Items" []itemOption (each with its Units) and "Selected"
+  unit number; the list follows the chosen item.
+*/}}
+{{define "unit-select"}}
+  <div class="field" data-place-picker-target="unitField">
+    <label for="unit">Which one? <span class="optional">optional</span></label>
+    <select id="unit" name="unit" data-place-picker-target="unit">
+      <option value="0">— Not sure, or more than one —</option>
+      {{range .Items}}{{$item := .ID}}{{range .Units}}<option value="{{.Number}}" data-item="{{$item}}" {{if eq .Number $.Selected}}selected{{end}}>{{.Name}}</option>{{end}}{{end}}
+    </select>
+  </div>
+{{end}}
+
 {{define "place-select"}}
   <div class="field">
     <label for="{{.Name}}">{{.Label}}{{if not .Required}} <span class="optional">optional</span>{{end}}</label>
