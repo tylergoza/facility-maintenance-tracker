@@ -159,7 +159,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "dashboard", map[string]any{
 		"Title": title, "Places": filterPlaces(tree, true), "Selected": selected, "PlaceID": placeID,
 		"Tasks": s.groupTasks(tasks), "Health": health, "LowSupplies": lowSupplies, "Problems": problems, "DueSoonDays": s.DueSoonDays(),
-		"Updated": time.Now().Format("Mon Jan 2, 3:04 PM"),
+		"Updated": time.Now().Format("Mon Jan 2, 3:04 PM"), "Live": true,
 	})
 }
 

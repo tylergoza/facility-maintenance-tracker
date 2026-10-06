@@ -40,6 +40,7 @@ To run in production, see [Deploying](#deploying).
 | Supplies | Counts of things that get used up (paper towels, filters, bulbs) or washed and reused (mop heads), with a history of every change and low-stock flags. Tasks can take a supply each time they're done. |
 | Problems | Report a problem against a place or an item in it; staff can narrow it to one numbered unit, mark "I'm on it", assign, add notes, and record the fix (Replace or Log work) straight from the problem, which resolves it. Only signed-in users can see reports. Admins can let anyone report without signing in, separately for places and for items (both off by default; 10 reports an hour per device, with a honeypot field for bots); otherwise scanning a code asks people to sign in first. Any place's page prints a QR code that opens the report form for it, or a sheet of codes for everything inside it. |
 | QR codes and scanning | Items print stickers from their page (or a product's, for every one of it): one per unit, carrying the ID on its sticker, so scanning reports a problem with that exact one and still finds it after it moves; counted and plain fixed items get one code each. Supplies print a code for their shelf or bin (one, or a sheet for the supplies listed) that opens the supply's page to take some, recount, restock or "Ask for more". Asking flags it on the dashboard and Supplies page until it's restocked. Signed-in users can scan any of these from **Scan** with the phone's camera (the browser's QR reader where there is one, otherwise the bundled [jsQR](https://github.com/cozmo/jsQR), Apache 2.0); the camera needs https. A phone's own camera app works too. |
+| Live updates | The dashboard, Problems and Supplies pages, and each problem and supply, update by themselves while open when anyone saves a change (over [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) at `/events`). If you're partway through a form there, a notice offers the changes instead of wiping what you typed. An installed app on a phone catches up when it comes back to the screen; phones pause apps in the background, so this doesn't notify anyone. |
 | Users | Admins manage users, settings (site name, site address, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
 
 ## Stimulus autoloader
@@ -100,6 +101,10 @@ The app is one binary plus one `.db` file. Use HTTPS in production (secure
 cookies and the PWA install prompt need it): put it behind a reverse proxy such
 as [Caddy](https://caddyserver.com), which gets certificates automatically
 (see `deploy/Caddyfile`).
+
+Proxies must pass `/events` through unbuffered. Caddy does once it's left out
+of `encode`, as in `deploy/Caddyfile`. With nginx, turn off `proxy_buffering`
+for that path (the app also sends `X-Accel-Buffering: no`).
 
 Until the first account exists, `/setup` lets **anyone** create the admin. On a
 server reachable from the internet, create the admin with `create-user` before

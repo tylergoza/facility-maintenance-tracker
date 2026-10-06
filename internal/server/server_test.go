@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1391,4 +1392,63 @@ func TestQRStickersAndScanning(t *testing.T) {
 	if sp, _ := st.GetSupply(1); sp.Requested() {
 		t.Error("the request should be cleared")
 	}
+}
+
+func TestLiveEvents(t *testing.T) {
+	c, st := newTestServer(t)
+	st.CreateUser("admin", "", "a long password", true)
+
+	resp, err := c.http.Get(c.base + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type %q", ct)
+	}
+	lines := make(chan string)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			if strings.HasPrefix(sc.Text(), "data:") {
+				lines <- sc.Text()
+			}
+		}
+	}()
+	next := func(wait time.Duration) string {
+		select {
+		case l := <-lines:
+			return l
+		case <-time.After(wait):
+			return ""
+		}
+	}
+	if l := next(2 * time.Second); l != "data: ping" {
+		t.Fatalf("first message %q, want a ping", l)
+	}
+
+	// Signing in changes nothing anyone else sees.
+	c.post("/login", "/login", url.Values{"username": {"admin"}, "password": {"a long password"}}, 200)
+	if l := next(200 * time.Millisecond); l != "" {
+		t.Fatalf("signing in sent %q", l)
+	}
+	// A failed save doesn't either.
+	c.post("/items/new", "/items", url.Values{"place_id": {"99"}, "name": {"X"}}, 422)
+	if l := next(200 * time.Millisecond); l != "" {
+		t.Fatalf("a rejected save sent %q", l)
+	}
+	c.post("/places/new", "/places", url.Values{"kind": {"building"}, "name": {"Sanctuary"}}, 200)
+	if l := next(2 * time.Second); l != "data: change" {
+		t.Fatalf("after a save got %q, want a change", l)
+	}
+
+	for _, p := range []string{"/", "/problems", "/supplies"} {
+		if !strings.Contains(c.get(p, 200), `data-controller="live"`) {
+			t.Errorf("%s should update live", p)
+		}
+	}
+	if strings.Contains(c.get("/places", 200), `data-controller="live"`) {
+		t.Error("/places shouldn't update live")
+	}
+	c.get("/static/js/controllers/live_controller.js", 200)
 }

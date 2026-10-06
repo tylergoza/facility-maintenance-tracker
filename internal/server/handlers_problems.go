@@ -239,7 +239,7 @@ func (s *Server) handleProblems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "problems/index", map[string]any{
-		"Title": "Problems", "Problems": problems, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f, "StatusParam": q.Get("status"), "Mine": mine,
+		"Title": "Problems", "Problems": problems, "Places": tree.All(), "Tags": tree.Tags(), "Filter": f, "StatusParam": q.Get("status"), "Mine": mine, "Live": true,
 	})
 }
 
@@ -259,7 +259,7 @@ func (s *Server) handleProblemShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	data := map[string]any{"Title": p.Title, "Problem": p, "Updates": updates, "Users": users, "Statuses": store.ProblemStatuses}
+	data := map[string]any{"Title": p.Title, "Problem": p, "Updates": updates, "Users": users, "Statuses": store.ProblemStatuses, "Live": true}
 	if p.ItemID != 0 {
 		item, err := s.store.GetItem(p.ItemID)
 		if err != nil {

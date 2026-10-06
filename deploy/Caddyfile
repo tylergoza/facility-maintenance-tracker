@@ -4,6 +4,8 @@
 #   sudo cp Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
 # Set the app's TRUST_PROXY=1 and, in Settings, Site address to https://<this name>.
 maintenance.example.org {
-	encode gzip
+	# /events streams live updates; compressing it would hold them back.
+	@compress not path /events
+	encode @compress gzip
 	reverse_proxy 127.0.0.1:8080
 }

@@ -1,6 +1,8 @@
 # /etc/caddy/sites/maintenance-tracker.caddy, managed by the maintenance tracker's
 # deploy/ansible; edits here are overwritten on the next deploy.
 {{ app_domain }} {
-	encode gzip
+	# /events streams live updates; compressing it would hold them back.
+	@compress not path /events
+	encode @compress gzip
 	reverse_proxy 127.0.0.1:8080
 }
