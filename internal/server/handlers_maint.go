@@ -115,7 +115,9 @@ func (s *Server) buildingHealth(tree *store.Places, tasks []store.Task) []buildi
 // Dashboard (public) -----------------------------------------------------
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if n, _ := s.store.CountUsers(); n == 0 {
+	// First run: set up the first admin. Not with SSO, where they come
+	// from User Management (and /setup is gone).
+	if n, _ := s.store.CountUsers(); n == 0 && !s.sso.Enabled() {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}

@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"slices"
@@ -24,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tylergoza/facility-maintenance-tracker/internal/sso"
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 	"github.com/tylergoza/facility-maintenance-tracker/web"
 )
@@ -36,6 +38,16 @@ type Config struct {
 	// proxy (Caddy, nginx, a DO load balancer) for client IP and HTTPS.
 	TrustProxy bool
 	SessionTTL time.Duration
+	// BaseURL is this app's public address (e.g. "https://maint.example.org"),
+	// used for the SSO redirect URI. If empty, the site address from
+	// Settings, else worked out from each request.
+	BaseURL string
+	// SSO*: sign-in through User Management. Empty SSOURL keeps the local
+	// password login.
+	SSOURL          string // public, for browser redirects
+	SSOInternalURL  string // server-to-server; SSOURL if empty
+	SSOClientID     string
+	SSOClientSecret string
 }
 
 type Server struct {
@@ -64,13 +76,19 @@ type Server struct {
 	reportLimiter *loginLimiter // public problem reports per IP
 	live          *hub
 	handler       http.Handler
+
+	sso    *sso.Client
+	grants *grantChecks
 }
 
 func New(cfg Config, st *store.Store, logger *slog.Logger) (*Server, error) {
 	if cfg.SessionTTL == 0 {
 		cfg.SessionTTL = 30 * 24 * time.Hour
 	}
-	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute), reportLimiter: newLoginLimiter(10, time.Hour), live: newHub()}
+	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute), reportLimiter: newLoginLimiter(10, time.Hour), live: newHub(), grants: newGrantChecks()}
+	if err := s.setupSSO(); err != nil {
+		return nil, err
+	}
 	if cfg.Dev {
 		s.webFS = os.DirFS("web")
 	} else {
@@ -91,6 +109,34 @@ func New(cfg Config, st *store.Store, logger *slog.Logger) (*Server, error) {
 	}
 	s.handler = s.routes()
 	return s, nil
+}
+
+// setupSSO checks the SSO settings and makes the client. With no SSOURL
+// the client is disabled and the app uses its local login.
+func (s *Server) setupSSO() error {
+	cfg := &s.cfg
+	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	if cfg.BaseURL != "" {
+		if u, err := url.Parse(cfg.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("BASE_URL %q must be an http(s) address like https://maint.example.org", cfg.BaseURL)
+		}
+	}
+	s.sso = sso.New(cfg.SSOURL, cfg.SSOInternalURL, cfg.SSOClientID, cfg.SSOClientSecret)
+	if !s.sso.Enabled() {
+		return nil
+	}
+	for name, v := range map[string]string{"SSO_URL": s.sso.PublicURL, "SSO_INTERNAL_URL": s.sso.InternalURL} {
+		if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("%s %q must be an http(s) address", name, v)
+		}
+	}
+	if s.sso.ClientID == "" || s.sso.ClientSecret == "" {
+		return errors.New("SSO_URL is set, so SSO_CLIENT_ID and SSO_CLIENT_SECRET are needed too (from registering this app in User Management)")
+	}
+	if s.store.Setting(localLoginSetting, "") == "on" {
+		s.log.Warn("local login is on (break-glass): /login shows the password form; turn it off with the local-login off command")
+	}
+	return nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
@@ -167,10 +213,24 @@ func (s *Server) computeAssets() error {
 		"manifest-src 'self'",
 		"worker-src 'self'",
 		"base-uri 'self'",
-		"form-action 'self'",
+		// A form posted after a sign-in ends is redirected to /login and
+		// on to User Management; browsers check form-action on redirects.
+		"form-action 'self'" + s.ssoOrigin(),
 		"frame-ancestors 'none'",
 	}, "; ")
 	return nil
+}
+
+// ssoOrigin is " <User Management's origin>" for the CSP, or "".
+func (s *Server) ssoOrigin() string {
+	if !s.sso.Enabled() {
+		return ""
+	}
+	u, err := url.Parse(s.sso.PublicURL)
+	if err != nil {
+		return ""
+	}
+	return " " + u.Scheme + "://" + u.Host
 }
 
 // asset returns the versioned URL for a file under web/static.

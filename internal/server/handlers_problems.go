@@ -254,7 +254,8 @@ func (s *Server) handleProblemShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	users, err := s.store.ListUsers()
+	// Whoever's on it stays listed even if their access was removed.
+	users, err := s.pickableUsers(r, []int64{p.AssignedTo})
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -336,10 +337,21 @@ func (s *Server) handleProblemUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, to, http.StatusSeeOther)
 		return
 	}
+	noAccess := func() {
+		s.setFlash(w, r, "error", "That person no longer has access to this app, so they can't be put on it. Choose someone else.")
+		http.Redirect(w, r, to, http.StatusSeeOther)
+	}
 	if c.AssignedTo != 0 {
-		if _, err := s.store.GetUser(c.AssignedTo); err != nil {
+		u, err := s.store.GetUser(c.AssignedTo)
+		if err != nil {
 			s.setFlash(w, r, "error", "That person no longer has an account.")
 			http.Redirect(w, r, to, http.StatusSeeOther)
+			return
+		}
+		// Someone whose access was removed stays on it if they already
+		// were, but can't be newly put on it.
+		if !u.Active && c.AssignedTo != p.AssignedTo {
+			noAccess()
 			return
 		}
 	}
@@ -349,6 +361,11 @@ func (s *Server) handleProblemUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	changed, err := s.store.UpdateProblem(c)
+	if errors.Is(err, store.ErrNotFound) && c.AssignedTo != 0 && c.AssignedTo != p.AssignedTo {
+		// Their access was removed since the check above.
+		noAccess()
+		return
+	}
 	if err != nil {
 		s.serverError(w, r, err)
 		return

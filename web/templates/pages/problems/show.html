@@ -85,7 +85,7 @@
         <label for="assigned_to">Who's on it</label>
         <select id="assigned_to" name="assigned_to">
           <option value="0">Nobody yet</option>
-          {{range .Users}}<option value="{{.ID}}" {{if eq .ID $p.AssignedTo}}selected{{end}}>{{.Name}}</option>{{end}}
+          {{range .Users}}<option value="{{.ID}}" {{if eq .ID $p.AssignedTo}}selected{{end}}>{{.Name}}{{if not .Active}} (no access){{end}}</option>{{end}}
         </select>
       </div>
       <div class="field">

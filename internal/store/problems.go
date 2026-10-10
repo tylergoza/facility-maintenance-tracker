@@ -311,7 +311,9 @@ func (s *Store) UpdateProblem(c ProblemChange) (bool, error) {
 	if c.AssignedTo != assigned {
 		name := ""
 		if c.AssignedTo != 0 {
-			if err := tx.QueryRow(`SELECT COALESCE(NULLIF(display_name, ''), username) FROM users WHERE id = ?`, c.AssignedTo).Scan(&name); err != nil {
+			// Someone whose access was removed (inactive) stays assigned
+			// if they already were, but can't be newly assigned.
+			if err := tx.QueryRow(`SELECT COALESCE(NULLIF(display_name, ''), username) FROM users WHERE id = ? AND active = 1`, c.AssignedTo).Scan(&name); err != nil {
 				return false, notFound(err)
 			}
 		}
