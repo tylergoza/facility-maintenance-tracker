@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 )
 
 func (s *Server) routes() http.Handler {
@@ -35,6 +37,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /setup", s.handleSetupForm)
 	mux.HandleFunc("POST /setup", s.handleSetup)
+	mux.HandleFunc("GET /signed-out", s.handleSignedOut)
+	// Single sign-on (404 unless SSO_URL is set). /auth/start goes to User
+	// Management even while the break-glass local login is on.
+	mux.HandleFunc("GET /auth/start", s.handleSSOStart)
+	mux.HandleFunc("GET /auth/callback", s.handleSSOCallback)
 
 	// Public when an admin has turned on public reports; otherwise signed-in only.
 	mux.Handle("GET /report", s.reportAccess(s.handleReportForm))
@@ -131,6 +138,7 @@ func (s *Server) routes() http.Handler {
 	admin("GET /admin/users/{id}/edit", s.handleUserEdit)
 	admin("POST /admin/users/{id}", s.handleUserUpdate)
 	admin("POST /admin/users/{id}/delete", s.handleUserDelete)
+	admin("POST /admin/access/{sub}", s.handleSSOAccessUpdate) // SSO only
 	admin("GET /admin/settings", s.handleSettings)
 	admin("POST /admin/settings", s.handleSettingsUpdate)
 	admin("GET /admin/backup", s.handleBackup)
@@ -201,10 +209,25 @@ func (s *Server) loadSession(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// The live update stream needs no user (it carries no data) and
+		// can stay open for hours, so it doesn't look at the session:
+		// opening it never waits on User Management, and the grant is
+		// checked by the page refreshes it sets off instead.
+		if r.URL.Path == "/events" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
-			if sess, err := s.store.GetSession(c.Value); err == nil {
+			sess, err := s.store.GetSession(c.Value)
+			var user *store.User
+			if err == nil {
+				// SSO sessions are re-checked with User Management every
+				// few minutes; nil means that sign-in has ended.
+				user = s.checkGrant(sess)
+			}
+			if user != nil {
 				r = withValue(r, ctxSession, sess)
-				r = withValue(r, ctxUser, &sess.User)
+				r = withValue(r, ctxUser, user)
 			} else {
 				http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1})
 			}

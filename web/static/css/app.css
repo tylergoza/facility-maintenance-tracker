@@ -197,6 +197,7 @@ main.container { flex: 1; padding-top: 20px; padding-bottom: 40px; }
 .btn--sm { min-height: 34px; padding: 5px 12px; font-size: .875rem; }
 .btn--block { width: 100%; }
 .inline-form { display: inline; margin: 0; }
+.status-form select { min-height: 34px; padding: 4px 8px; font-size: .9rem; width: auto; font-weight: 600; }
 
 /* ---------- Page structure ---------- */
 

@@ -28,12 +28,17 @@ type client struct {
 
 func newTestServer(t *testing.T) (*client, *store.Store) {
 	t.Helper()
+	return newTestServerWith(t, Config{})
+}
+
+func newTestServerWith(t *testing.T, cfg Config) (*client, *store.Store) {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	srv, err := New(Config{}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -77,6 +77,10 @@ Set with a flag or an environment variable. Flags go **before** any command
 | `TZ` | | system | Facility time zone (e.g. `America/Chicago`): decides what "today" and "overdue" mean |
 | `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from a reverse proxy, for secure cookies, HSTS and real client IPs. Only turn on when a proxy is the only way in; otherwise clients can fake their IP. |
 | `DEV=1` | `-dev` | off | Load templates/static from `./web` on disk (development only) |
+| `SSO_URL` | | | User Management's public address (e.g. `https://accounts.example.org`). Set it to sign in there instead of with local passwords; empty keeps the local login. |
+| `SSO_INTERNAL_URL` | | `SSO_URL` | User Management for server-to-server calls, e.g. `http://127.0.0.1:8100` on the shared droplet |
+| `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | | | From registering this app in User Management (shown once). Required when `SSO_URL` is set; the app won't start without them. |
+| `BASE_URL` | | site address, else from the request | This app's public address, e.g. `https://maint.example.org`. The sign-in redirect URI is `BASE_URL/auth/callback` and must be registered exactly like that in User Management. |
 
 Everything else is in the app under **Settings** (admins): site name, **site
 address** (the public `https://…` address used in links and QR codes, set it
@@ -87,13 +91,83 @@ report problems without signing in.
 
 ```sh
 maintenance-tracker create-user alice [--admin]   # prompts for a password (10+ characters)
-maintenance-tracker reset-password alice
+maintenance-tracker reset-password alice           # also gives SSO users a local password, and turns them back on
+maintenance-tracker local-login on|off             # break-glass, see Single sign-on
 maintenance-tracker backup /path/backup.db        # safe while the app is running
 maintenance-tracker seed-demo                     # sample places, items and tasks
 ```
 
 They use the same database as the server, so pass the same `-db` (or `DB_PATH`)
 and run them as the same user. The Docker and systemd sections below show how.
+
+## Single sign-on
+
+With `SSO_URL` set, people sign in with their church account in User
+Management (the `user_management` repo) instead of a password here:
+
+1. `/login` sends the browser to User Management's `/authorize`
+   (authorization code + PKCE). The state and PKCE verifier wait in a
+   10-minute `mt_sso` cookie.
+2. User Management sends it back to `/auth/callback` with a code. The app
+   checks the state, swaps the code for a grant (server to server), and
+   adds or updates the person's local user row by their User Management ID.
+   An existing local user with the same username is linked, so their
+   maintenance logs, problems and the rest stay theirs. Role `admin` there
+   means admin here.
+3. Every 5 minutes at most, a session's grant is checked again, which picks
+   up name and role changes. If User Management says the sign-in has
+   ended (signed out, turned off, access removed), the session ends here
+   too. If it can't be reached, sessions keep working for an hour past
+   their last good check, so restarting it signs no one out. The live
+   update stream (`/events`) doesn't look at sessions at all; the page
+   refreshes it sets off do the checking.
+4. Signing out here also signs out of User Management, and so of the
+   other apps within 5 minutes.
+
+`/setup` is gone (the first admin comes from User Management) and
+`/account` links to User Management's account page. The public dashboard,
+public problem reports and the API are unchanged: API tokens still work
+the same, with or without SSO.
+
+The redirect URI is `BASE_URL/auth/callback`, or the site address from
+Settings when `BASE_URL` isn't set, or else the address the request came
+in on.
+
+**Users page.** With SSO on, Admin › Users (`/admin/users`) is the app-admin
+page for this app's people, read from and changed through User
+Management's API. It lists everyone with access to the tracker: username,
+name, role, whether they're active, suspended or turned off, and who last
+changed it. An admin can change someone's role (any role the tracker has
+there) or suspend and restore their access. Suspending signs them out of
+the tracker straight away. User Management checks every change against
+its own records, as the signed-in admin, and the page shows its answer if
+it says no (e.g. "make someone else an admin first" for the last admin).
+Rows a user admin has locked are read-only. There's no adding people,
+passwords, renames or deleting here: a user admin does those in User
+Management, and user admins get a "Manage in User Management" link. An
+admin signed in with the break-glass local login sees the list read-only.
+
+Opening the Users page or a problem's "Who's on it" picker pulls the list
+from User Management (reused for a minute) and updates the local users, so
+people show up before they've ever signed in here. Anyone whose access is
+gone keeps their local row, so their logs and problems stay theirs, but is
+marked inactive: they stay on a problem they were already on, marked
+"(no access)", and can't be newly put on one. If User Management can't be
+reached, the picker uses the last list.
+
+**Break-glass.** If User Management is broken, an admin can bring the
+password form back over SSH, without a restart:
+
+```sh
+sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db local-login on
+sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db reset-password alice
+```
+
+People who only ever signed in through SSO have no password here, so give
+the admin one with `reset-password` (which also turns their account here
+back on, in case their access was removed). `/login` then shows the password
+form (with a link to sign in through User Management as well). Run
+`local-login off` once User Management is back.
 
 ## Deploying
 
@@ -305,6 +379,7 @@ for a place that doesn't exist, 404 for anything else not found.
 
 ## Security notes
 
+- With `SSO_URL` set, sign-in goes through User Management (see Single sign-on); grants are kept only in the server-side session row, never in a cookie.
 - Passwords are bcrypt-hashed. Sessions are random tokens stored server-side, in `HttpOnly`, `SameSite=Lax` cookies (`Secure` over HTTPS).
 - CSRF uses a double-submit token on every POST. Logins are limited to 10 failures per IP per 15 minutes.
 - A strict CSP (`script-src 'self'` + import-map hash) is set, along with `X-Frame-Options`, `nosniff` and HSTS over HTTPS.
