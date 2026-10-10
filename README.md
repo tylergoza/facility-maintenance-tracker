@@ -308,6 +308,27 @@ Every setting and its default (region, size, time zone, which addresses can
 use SSH, …) is in `deploy/ansible/defaults.yml`; override any of them in
 `vars.yml`.
 
+**Turning on single sign-on.** SSO is off until `sso_url` is set (see
+[Single sign-on](#single-sign-on)). Deploy User Management to this droplet
+and run its import-users playbook first; that prints the tracker's client
+secret. Then:
+
+```sh
+# in deploy/ansible/vars.yml
+sso_url: https://accounts.example.org
+# base_url: https://maintenance.example.org   # optional; default is Settings → Site address
+
+export UM_TRACKER_SECRET=...           # the secret import-users printed
+make deploy
+```
+
+The deploy stops before building if `sso_url` is set and `UM_TRACKER_SECRET`
+is empty, so export it for every deploy while SSO is on. The SSO settings go
+in the unit's drop-in (`/etc/systemd/system/maintenance-tracker.service.d/override.conf`,
+root-only). To turn SSO off, remove `sso_url` and `make deploy` again. If User
+Management breaks while SSO is on, `local-login on` on the droplet is the
+break-glass; no redeploy needed.
+
 Ansible can't answer a PIN prompt, so if your SSH key is on a hardware token
 (e.g. a YubiKey) the plays hang at "Wait for SSH". Make a deploy key just for
 this droplet, keep its passphrase in the macOS Keychain, and set

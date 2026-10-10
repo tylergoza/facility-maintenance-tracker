@@ -30,3 +30,9 @@ droplet_name: maintenance-tracker
 # ssh_authorized_keys: [~/.ssh/id_ed25519_sk.pub]
 
 # tz: America/Chicago
+
+# Single sign-on through User Management. Set this, then deploy with
+#   export UM_TRACKER_SECRET=...   # printed by User Management's import-users playbook
+# Unset it and redeploy to turn SSO off; `local-login on` is the break-glass.
+# sso_url: https://accounts.example.org
+# base_url: https://maintenance.example.org   # default: Settings → Site address

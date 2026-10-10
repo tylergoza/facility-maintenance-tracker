@@ -48,6 +48,24 @@ ssh_sources: [0.0.0.0/0, "::/0"]
 # Facility time zone: decides what "today" and "overdue" mean.
 tz: America/Chicago
 
+# Single sign-on through User Management (README: Single sign-on). Empty
+# sso_url means SSO is off and people sign in with passwords here. To turn it
+# on, set sso_url in vars.yml to User Management's public address and
+# redeploy; to turn it off again, unset it and redeploy. If User Management
+# is broken while SSO is on, `local-login on` on the droplet is the
+# break-glass (README), no redeploy needed.
+sso_url: ""
+# Where the tracker reaches User Management server to server. It runs on
+# this droplet, so loopback.
+sso_internal_url: "http://127.0.0.1:8100"
+sso_client_id: tracker
+# From the environment so it never lands in a file. User Management's
+# import-users playbook prints it.
+sso_client_secret: "{{ lookup('env', 'UM_TRACKER_SECRET') }}"
+# The tracker's public address, for the SSO redirect URI. Empty means the
+# app uses Settings → Site address (or else the address requests come in on).
+base_url: ""
+
 # The first deploy to an empty database creates this admin before the app
 # starts, so /setup is never open. Leave MT_ADMIN_PASSWORD unset to get a
 # random password printed at the end of the run.

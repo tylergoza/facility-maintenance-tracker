@@ -16,6 +16,15 @@
   vars:
     repo_root: "{{ playbook_dir | dirname | dirname }}"
   tasks:
+    - name: Check the SSO settings
+      ansible.builtin.assert:
+        that: not sso_url or sso_client_secret | length > 0
+        fail_msg: >-
+          sso_url is set but the client secret is empty. Run
+          `export UM_TRACKER_SECRET=...` with the secret User Management's
+          import-users playbook printed, or unset sso_url to deploy without SSO.
+        quiet: true
+
     - name: Run the tests
       ansible.builtin.command:
         cmd: make test
@@ -101,14 +110,27 @@
         state: directory
         mode: "0755"
 
-    # The unit in the repo has a placeholder TZ; this overrides it.
-    - name: Set the time zone
+    # The unit in the repo has a placeholder TZ; this overrides it. The SSO
+    # lines are only written when sso_url is set, so unsetting it and
+    # redeploying turns SSO off. The file holds the client secret, hence
+    # root-only and no_log.
+    - name: Set the time zone and single sign-on
       ansible.builtin.copy:
         content: |
           [Service]
           Environment=TZ={{ tz }}
+          {% if sso_url %}
+          Environment=SSO_URL={{ sso_url }}
+          Environment=SSO_INTERNAL_URL={{ sso_internal_url }}
+          Environment=SSO_CLIENT_ID={{ sso_client_id }}
+          Environment=SSO_CLIENT_SECRET={{ sso_client_secret }}
+          {% endif %}
+          {% if base_url %}
+          Environment=BASE_URL={{ base_url }}
+          {% endif %}
         dest: /etc/systemd/system/maintenance-tracker.service.d/override.conf
-        mode: "0644"
+        mode: "0600"
+      no_log: true
       notify: Restart the app
 
     # The droplet can be shared with the production planner: each app puts
