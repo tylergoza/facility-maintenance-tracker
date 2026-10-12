@@ -117,7 +117,7 @@ func (s *Server) buildingHealth(tree *store.Places, tasks []store.Task) []buildi
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// First run: set up the first admin. Not with SSO, where they come
 	// from User Management (and /setup is gone).
-	if n, _ := s.store.CountUsers(); n == 0 && !s.sso.Enabled() {
+	if n, _ := s.store.CountUsers(); n == 0 && !s.SSO().Enabled() {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
@@ -503,10 +503,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 	name := formStr(r, "site_name")
 	days, err := strconv.Atoi(formStr(r, "due_soon_days"))
-	siteURL, urlErr := normalizeSiteURL(formStr(r, "site_url"))
+	siteURL, urlErr := normalizeURL(formStr(r, "site_url"))
 	var errs []string
 	if urlErr != nil {
-		errs = append(errs, urlErr.Error())
+		errs = append(errs, "Site address "+urlErr.Error())
 	}
 	if name == "" {
 		errs = append(errs, "Site name is required.")
@@ -576,9 +576,10 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, f)
 }
 
-// normalizeSiteURL checks the site address from Settings and trims it to
-// "scheme://host[:port][/path]" with no trailing slash. Blank is allowed.
-func normalizeSiteURL(v string) (string, error) {
+// normalizeURL checks an address (the site address, a connection's) and
+// trims it to "scheme://host[:port][/path]" with no trailing slash. Blank
+// is allowed.
+func normalizeURL(v string) (string, error) {
 	if v == "" {
 		return "", nil
 	}
@@ -587,7 +588,7 @@ func normalizeSiteURL(v string) (string, error) {
 	}
 	u, err := url.Parse(v)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", errors.New("Site address should look like https://maintenance.example.org")
+		return "", errors.New("should look like https://example.org")
 	}
 	return u.Scheme + "://" + u.Host + strings.TrimRight(u.Path, "/"), nil
 }

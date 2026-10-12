@@ -21,6 +21,29 @@
 </div>
 {{if $p.Notes}}<div class="card notes">{{range lines $p.Notes}}<p>{{.}}</p>{{end}}</div>{{end}}
 
+{{with .Upcoming}}
+<section class="section">
+  <div class="section__head">
+    <h2 class="section__title">Coming up here <span class="count">{{len .Bookings}}</span></h2>
+    {{if .Link}}<a class="btn btn--ghost btn--sm" href="{{.Link}}">Calendar</a>{{end}}
+  </div>
+  {{if .Err}}
+    <p class="muted">{{.Err}}</p>
+  {{else if .Bookings}}
+    {{range .Tasks}}
+      <p class="alert alert--warn small"><a href="/items/{{.Task.ItemID}}">{{.Task.Name}} ({{.Task.ItemName}})</a> {{if .Overdue}}is overdue, and the room is booked today{{else}}is due {{fmtDate .Day}}, when the room is booked{{end}}: {{.Title}}.</p>
+    {{end}}
+    <ul class="plain-list">
+      {{range .Bookings}}
+        <li><span class="muted">{{.When}}</span> · {{if .URL}}<a href="{{.URL}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</li>
+      {{end}}
+    </ul>
+  {{else}}
+    <p class="muted">Nothing booked here in the next two weeks.</p>
+  {{end}}
+</section>
+{{end}}
+
 {{if .Problems}}
 <section class="section">
   <div class="section__head">

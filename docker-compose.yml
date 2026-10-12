@@ -14,4 +14,4 @@ services:
       TZ: America/Chicago      # your facility's time zone: decides what "today" is
       # TRUST_PROXY: "1"       # only when Caddy/nginx is in front; without a proxy, clients could fake their IP
     volumes:
-      - ./data:/data           # the whole app state is ./data/maintenance.db
+      - ./data:/data           # the whole app state: ./data/maintenance.db and secrets.key

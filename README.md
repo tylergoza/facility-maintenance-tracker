@@ -81,6 +81,12 @@ Set with a flag or an environment variable. Flags go **before** any command
 | `SSO_INTERNAL_URL` | | `SSO_URL` | User Management for server-to-server calls, e.g. `http://127.0.0.1:8100` on the shared droplet |
 | `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | | | From registering this app in User Management (shown once). Required when `SSO_URL` is set; the app won't start without them. |
 | `BASE_URL` | | site address, else from the request | This app's public address, e.g. `https://maint.example.org`. The sign-in redirect URI is `BASE_URL/auth/callback` and must be registered exactly like that in User Management. |
+| `CALENDAR_URL`, `CALENDAR_INTERNAL_URL`, `CALENDAR_TOKEN` | | | The church calendar, read for **Coming up here** on a room's page (a read token, `cal_…`). Off when unset. |
+
+The `SSO_*`/`BASE_URL` and `CALENDAR_*` variables are optional: each set
+of them is a **connection** an admin can also set in the app (see
+[Connections](#connections)). Set any one of a connection's variables and
+the whole connection comes from the environment.
 
 Everything else is in the app under **Settings** (admins): site name, **site
 address** (the public `https://…` address used in links and QR codes, set it
@@ -93,6 +99,7 @@ report problems without signing in.
 maintenance-tracker create-user alice [--admin]   # prompts for a password (10+ characters)
 maintenance-tracker reset-password alice           # also gives SSO users a local password, and turns them back on
 maintenance-tracker local-login on|off             # break-glass, see Single sign-on
+maintenance-tracker connection clear sso|calendar  # break-glass, deletes a saved connection (see Connections)
 maintenance-tracker backup /path/backup.db        # safe while the app is running
 maintenance-tracker seed-demo                     # sample places, items and tasks
 ```
@@ -100,9 +107,81 @@ maintenance-tracker seed-demo                     # sample places, items and tas
 They use the same database as the server, so pass the same `-db` (or `DB_PATH`)
 and run them as the same user. The Docker and systemd sections below show how.
 
+## Connections
+
+Links to the other church apps are set by an admin on **Connections**
+(`/admin/connections`), or on the server with environment variables. The
+tracker has two:
+
+| Connection | What for | Environment |
+|------------|----------|-------------|
+| Single sign-on | Sign in through User Management ([below](#single-sign-on)) | `SSO_URL`, `SSO_INTERNAL_URL`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET`, `BASE_URL` |
+| Calendar | **Coming up here** on a room's page: the next two weeks of bookings there, and a warning on maintenance due on a booked day | `CALENDAR_URL`, `CALENDAR_INTERNAL_URL`, `CALENDAR_TOKEN` |
+
+Apps that read from the tracker (the planners, the calendar's room import)
+connect *to* it with a token from the **API** page; that doesn't change.
+
+The rules:
+
+- **Environment, then settings, then off.** If any of a connection's
+  variables is set on the server, the whole connection comes from there;
+  the page shows it greyed out as *Set on the server*. Nothing is mixed
+  from the two places.
+- **Secrets are write-only.** The page shows "Set, ends …a1b2", never the
+  value. A blank field keeps the saved one; **Remove** clears it. Saved
+  secrets are encrypted (AES-256-GCM) with a key in `secrets.key` next to
+  the database (made on first start, mode 0600), so **Download backup**
+  doesn't carry them in plain text. Restored somewhere without its
+  `secrets.key`, a connection says *Can't read the saved secret: enter it
+  again*; nothing else breaks. Someone with the whole server has the key
+  too: this protects the database file on its own.
+- **Changes apply at once**, without a restart. **Test** asks the other
+  app and says what's wrong in plain words; saving tests too, and saves
+  even when the test fails, so an app that isn't running yet can be set up.
+- Who changed a connection and when is shown on the page and logged
+  (never the values).
+
+**Single sign-on needs care.** Saving it on the page only stores the values
+as *pending*; sign-in doesn't change. **Test sign-in** takes you through
+User Management and back with the pending values, and only if you come
+back as an `admin` of the tracker there do they go live. Otherwise the old
+setting stays and the page says why. **Turn off single sign-on** asks
+first, since people then need local passwords. If saved SSO settings are
+ever broken, the app still starts, uses local login and shows admins a
+banner; wrong SSO values in the *environment* still stop it at start.
+
+**Taking a connection over from the server.** Deploy with the values set
+(`vars.yml`, see below), and the app starts connected. On **Connections**,
+press **Keep in settings**: the server's values are copied into the app's
+settings and the page says *settings match, so it's safe to remove from the
+server*. Then blank them in `vars.yml` and redeploy; the section now says
+*Set here* and nothing disconnected. If settings and the server ever
+differ, the page says so (the server's win).
+
+**Break-glass.** If a bad saved connection locks people out:
+
+```sh
+sudo -u maintenance maintenance-tracker -db /var/lib/maintenance-tracker/maintenance.db connection clear sso
+```
+
+That deletes the saved values (and any pending SSO values); anything set on
+the server still applies. `local-login on` (below) still works too.
+
+**The calendar.** The calendar owns bookings; the tracker owns rooms. The
+calendar imports rooms through `GET /api/v1/places` with a tracker token
+(make one named "Church calendar" on **API**). A room it imported keeps the
+place's `id`; a place deleted here drops out of that list, which the
+calendar treats as archived. Going the other way is optional: make a
+**read** token on the calendar's API tokens page and set it under
+**Calendar** here. A room's page then asks the calendar for that room's
+bookings (`GET /api/v1/events?room=<name>`, matched on the place's name or
+its "104 – Nursery" label), at most once a minute and for no more than 3
+seconds, so a slow calendar can't hold the page up. Bookings the token
+can't see in full show as "Booked".
+
 ## Single sign-on
 
-With `SSO_URL` set, people sign in with their church account in User
+With single sign-on set up (on [Connections](#connections) or with `SSO_URL`), people sign in with their church account in User
 Management (the `user_management` repo) instead of a password here:
 
 1. `/login` sends the browser to User Management's `/authorize`
@@ -129,9 +208,9 @@ Management (the `user_management` repo) instead of a password here:
 public problem reports and the API are unchanged: API tokens still work
 the same, with or without SSO.
 
-The redirect URI is `BASE_URL/auth/callback`, or the site address from
-Settings when `BASE_URL` isn't set, or else the address the request came
-in on.
+The redirect URI is `BASE_URL/auth/callback` (**This app's address** on
+Connections), or the site address from Settings when that isn't set, or
+else the address the request came in on.
 
 **Users page.** With SSO on, Admin › Users (`/admin/users`) is the app-admin
 page for this app's people, read from and changed through User
@@ -308,8 +387,27 @@ Every setting and its default (region, size, time zone, which addresses can
 use SSH, …) is in `deploy/ansible/defaults.yml`; override any of them in
 `vars.yml`.
 
-**Turning on single sign-on.** SSO is off until `sso_url` is set (see
-[Single sign-on](#single-sign-on)). Deploy User Management to this droplet
+**Connections from Ansible.** Every connection variable in `vars.yml` is
+optional: leave it blank to manage the connection in the app on
+**Connections** instead. A value set there is fixed in the app until you
+take it over (see [Connections](#connections)): press **Keep in settings**,
+blank the values in `vars.yml`, and `make deploy` again. Pre-deploy backups
+copy `secrets.key` beside each `.db` (same name, `.key`), since the saved
+secrets need it.
+
+To set the calendar from Ansible:
+
+```sh
+# in deploy/ansible/vars.yml
+calendar_url: https://calendar.example.org
+calendar_internal_url: http://127.0.0.1:8120   # same droplet
+
+export MT_CALENDAR_TOKEN=cal_...       # a read token made in the calendar
+make deploy
+```
+
+**Turning on single sign-on.** Either set it up in the app on
+**Connections**, or set `sso_url` (see [Single sign-on](#single-sign-on)). Deploy User Management to this droplet
 and run its import-users playbook first; that prints the tracker's client
 secret. Then:
 
@@ -367,7 +465,10 @@ On any machine with the binary (`make build` builds one for the current OS):
 ### Moving between hosts
 
 1. Get a snapshot: **Settings → Download backup**, or the `backup` command.
-2. On the new host, stop the app, copy the file to its database path, start the app.
+   Copy `secrets.key` from beside the database too, or re-enter the saved
+   connection secrets on **Connections** afterwards.
+2. On the new host, stop the app, copy the file to its database path (and
+   `secrets.key` next to it, mode 0600, owned by the app's user), start the app.
    - Docker: copy it to `./data/maintenance.db`, then `sudo chown 10001:10001 data/maintenance.db`.
    - systemd: copy it to `/var/lib/maintenance-tracker/maintenance.db`, then `sudo chown maintenance: /var/lib/maintenance-tracker/maintenance.db`.
 
@@ -400,7 +501,8 @@ for a place that doesn't exist, 404 for anything else not found.
 
 ## Security notes
 
-- With `SSO_URL` set, sign-in goes through User Management (see Single sign-on); grants are kept only in the server-side session row, never in a cookie.
+- Saved connection secrets are encrypted with `secrets.key` (next to the database), so a downloaded backup doesn't carry them readable. Back the key up separately.
+- With single sign-on on, sign-in goes through User Management (see Single sign-on); grants are kept only in the server-side session row, never in a cookie.
 - Passwords are bcrypt-hashed. Sessions are random tokens stored server-side, in `HttpOnly`, `SameSite=Lax` cookies (`Secure` over HTTPS).
 - CSRF uses a double-submit token on every POST. Logins are limited to 10 failures per IP per 15 minutes.
 - A strict CSP (`script-src 'self'` + import-map hash) is set, along with `X-Frame-Options`, `nosniff` and HSTS over HTTPS.
@@ -412,7 +514,10 @@ for a place that doesn't exist, 404 for anything else not found.
 ```
 main.go, seed.go            entrypoint, CLI commands, demo data
 internal/store/             SQLite access, migrations (migrations/*.sql), scheduling logic
-internal/server/            routes, middleware, handlers, PWA endpoints
+internal/server/            routes, middleware, handlers, PWA endpoints, connections
+internal/secrets/           AES-256-GCM sealing of saved secrets (secrets.key)
+internal/sso/               User Management client
+internal/calendar/          church calendar read client
 web/templates/              layout, partials, pages, sw.js (service worker)
 web/static/                 css, js (application, autoloader, controllers, vendor), icons
 deploy/                     systemd unit, Caddyfile, ansible/ (DigitalOcean provision + deploy)
@@ -427,8 +532,10 @@ make test
 These cover the scheduling rules, sessions, CSRF, login rate limiting,
 supplies, counted items and units, products (merging, switching to counted,
 the migration), moves, the API and its tokens, problem reports (including public
-reporting and its rate limit), site address and QR codes, and an end-to-end flow
-that renders every page.
+reporting and its rate limit), site address and QR codes, connections (the
+whole-connection rule, encrypted secrets, pending single sign-on and its test
+sign-in, Keep in settings), Coming up here, and an end-to-end flow that renders
+every page.
 
 ## License
 

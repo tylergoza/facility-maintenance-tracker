@@ -4,6 +4,8 @@
 //	maintenance-tracker create-user NAME      create a user (prompts for password)
 //	maintenance-tracker reset-password NAME   set a new password for a user
 //	maintenance-tracker local-login on|off    break-glass: password sign-in even with SSO_URL set
+//	maintenance-tracker connection clear sso|calendar
+//	                                          break-glass: delete a saved connection's settings
 //	maintenance-tracker backup FILE           write a consistent copy of the database
 //	maintenance-tracker seed-demo             add sample data to try the app out
 //
@@ -73,11 +75,13 @@ func main() {
 		return
 	}
 
+	connEnv := map[string]string{}
+	for _, k := range server.ConnectionEnv() {
+		connEnv[k] = os.Getenv(k)
+	}
 	srv, err := server.New(server.Config{
 		Dev: *dev, TrustProxy: *trustProxy,
-		BaseURL: env("BASE_URL", ""),
-		SSOURL:  env("SSO_URL", ""), SSOInternalURL: env("SSO_INTERNAL_URL", ""),
-		SSOClientID: env("SSO_CLIENT_ID", ""), SSOClientSecret: env("SSO_CLIENT_SECRET", ""),
+		Env: connEnv,
 	}, st, logger)
 	if err != nil {
 		logger.Error("init server", "err", err)
@@ -132,6 +136,28 @@ var commandUsage = map[string]string{
 	"local-login":    "local-login on|off",
 	"backup":         "backup DEST_FILE",
 	"seed-demo":      "seed-demo",
+	"connection":     "connection clear sso|calendar",
+}
+
+// commandNames lists the commands for the unknown-command error.
+const commandNames = "create-user, reset-password, local-login, connection, backup, seed-demo"
+
+// connectionSettings are the saved settings each connection keeps in the
+// database. prefix, when set, also clears every key starting with it.
+var connectionSettings = map[string]struct {
+	keys   []string
+	prefix string
+}{
+	"sso": {keys: []string{"sso_url", "sso_internal_url", "sso_client_id", "sso_client_secret", "base_url"},
+		prefix: "sso_pending_"},
+	"calendar": {keys: []string{"calendar_url", "calendar_internal_url", "calendar_token"}},
+}
+
+// connectionKeys returns every setting key to delete for a connection,
+// including the record of who last changed it.
+func connectionKeys(name string) []string {
+	c := connectionSettings[name]
+	return append(slices.Clone(c.keys), "conn_"+name+"_changed_by", "conn_"+name+"_changed_at")
 }
 
 // checkCommand validates a command line before anything touches the
@@ -142,9 +168,18 @@ func checkCommand(args []string) error {
 	}
 	usage, ok := commandUsage[args[0]]
 	if !ok {
-		return fmt.Errorf("unknown command %q (commands: create-user, reset-password, local-login, backup, seed-demo)", args[0])
+		return fmt.Errorf("unknown command %q (commands: %s)", args[0], commandNames)
 	}
 	rest := args[1:]
+	if args[0] == "connection" {
+		if len(args) != 3 || args[1] != "clear" {
+			return errors.New("usage: " + usage)
+		}
+		if _, ok := connectionSettings[args[2]]; !ok {
+			return fmt.Errorf("unknown connection %q (use sso or calendar). usage: %s", args[2], usage)
+		}
+		return nil
+	}
 	if args[0] == "create-user" {
 		rest = slices.DeleteFunc(slices.Clone(rest), func(a string) bool { return a == "--admin" })
 	}
@@ -210,6 +245,19 @@ func runCommand(st *store.Store, args []string) error {
 		} else {
 			fmt.Println("Local login is off: with SSO_URL set, /login goes to User Management.")
 		}
+	case "connection":
+		// Break-glass for a bad saved connection setting that locks people
+		// out. Deletes the saved values; env vars on the server still apply.
+		name := args[2]
+		removed, err := st.ClearConnection(connectionKeys(name), connectionSettings[name].prefix)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Cleared the saved %s connection (%d settings). If %s_* is set on the server, that still applies.\n",
+			name, removed, strings.ToUpper(name))
+		if name == "sso" {
+			fmt.Println("Sign-in falls back to local passwords unless SSO_URL is set on the server; use reset-password if needed.")
+		}
 	case "backup":
 		if _, err := os.Stat(args[1]); err == nil {
 			return fmt.Errorf("%s already exists", args[1])
@@ -224,7 +272,7 @@ func runCommand(st *store.Store, args []string) error {
 		}
 		fmt.Println("Demo places, items and tasks added.")
 	default:
-		return fmt.Errorf("unknown command %q (commands: create-user, reset-password, local-login, backup, seed-demo)", args[0])
+		return fmt.Errorf("unknown command %q (commands: %s)", args[0], commandNames)
 	}
 	return nil
 }

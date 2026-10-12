@@ -37,9 +37,15 @@
 </div>
 
 <div class="card narrow">
+  <h2>Connections</h2>
+  <p>Single sign-on and the church calendar are set up on <a href="/admin/connections">Connections</a>.</p>
+</div>
+
+<div class="card narrow">
   <h2>Backup</h2>
   <p>This site holds {{pluralize .Counts.Places "place"}}, {{pluralize .Counts.Items "item"}} and {{pluralize .Counts.Tasks "active task"}}.</p>
   <p>Download a complete copy of the database. To move the site to another server, stop the app there, put this file at its database path, and start it again.</p>
+  <p class="hint">Secrets saved on <a href="/admin/connections">Connections</a> are encrypted in it with <code>secrets.key</code>, which sits next to the database on the server. Copy that too, or enter the secrets again after moving.</p>
   <a class="btn" href="/admin/backup" download>Download backup</a>
 </div>
 {{end}}
