@@ -88,6 +88,8 @@ func (s *Server) routes() http.Handler {
 	auth("POST /items/{id}/units", s.handleUnitsSave)
 
 	auth("GET /products", s.handleProducts)
+	auth("GET /products/new", s.handleProductNew)
+	auth("POST /products", s.handleProductCreate)
 	auth("GET /products/{id}", s.handleProductShow)
 	auth("GET /products/{id}/edit", s.handleProductEdit)
 	auth("POST /products/{id}", s.handleProductUpdate)

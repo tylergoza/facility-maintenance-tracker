@@ -1,9 +1,15 @@
 {{define "content"}}
+{{if .Form.ID}}
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/products">Products</a> › <a href="/products/{{.Form.ID}}">{{.Form.Name}}</a></nav>
 <div class="page-head"><div><h1>{{.Title}}</h1><p class="muted">Changes here apply to every one of them, in all {{pluralize .Form.PlaceCount "place"}}.</p></div></div>
+{{else}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/products">Products</a></nav>
+<div class="page-head"><div><h1>{{.Title}}</h1><p class="muted">Most products start from an item. Make one here for something with no items, like a service (Sound). A product with no items is only kept while it's offered on the calendar.</p></div></div>
+{{end}}
 <div class="card narrow">
   {{template "errors" .Errors}}
-  <form method="post" action="/products/{{.Form.ID}}" class="form">
+  <form method="post" action="{{if .Form.ID}}/products/{{.Form.ID}}{{else}}/products{{end}}" class="form"
+        data-controller="reveal" data-action="change->reveal#update">
     {{template "csrf" .CSRF}}
     <div class="field">
       <label for="name">Name</label>
@@ -15,18 +21,45 @@
       <datalist id="categories">{{range .Categories}}<option value="{{.}}">{{end}}</datalist>
     </div>
     {{template "tracking-choice" .Form.Counted}}
-    {{if not .Form.Counted}}<p class="hint">Switching to only counting them drops their IDs and notes, and which ones history and problems were about.</p>{{end}}
+    {{if and .Form.ID (not .Form.Counted)}}<p class="hint">Switching to only counting them drops their IDs and notes, and which ones history and problems were about.</p>{{end}}
+    <fieldset class="fieldset">
+      <legend>On the church calendar</legend>
+      <div class="segmented" role="radiogroup" aria-label="On the church calendar">
+        <label><input type="radio" name="booking" value="" {{if not .Form.Booking}}checked{{end}}> Not offered</label>
+        <label><input type="radio" name="booking" value="count" {{if eq .Form.Booking "count"}}checked{{end}}> Ask how many</label>
+        <label><input type="radio" name="booking" value="service" {{if eq .Form.Booking "service"}}checked{{end}}> Ask yes or no</label>
+      </div>
+      <p class="hint" data-reveal-target="section" data-reveal-when="booking=">People booking a room can't ask for it.</p>
+      <p class="hint" data-reveal-target="section" data-reveal-when="booking=count">Good for tables and chairs. They ask for a number, up to how many there are. Every item needs to be portable so it can be moved for a set-up.</p>
+      <p class="hint" data-reveal-target="section" data-reveal-when="booking=service">Good for Sound or Lighting. They ask for it with a note. No count and no items needed.</p>
+    </fieldset>
+    <fieldset class="fieldset" data-reveal-target="section" data-reveal-when="booking=count booking=service">
+      <legend>Offered with</legend>
+      {{if .OfferGroups}}
+        {{if and .Form.Booking (not .Form.Offers)}}<p class="hint">Not offered anywhere yet. Tick the places it can be asked for in.</p>{{else}}<p class="hint">Tick the places it can be asked for in.</p>{{end}}
+        {{range .OfferGroups}}
+          <div class="also-in__list">
+            <strong class="small">{{.Building}}</strong>
+            {{range .Places}}
+              <label class="check also-in__row"><input type="checkbox" name="offer" value="{{.ID}}" {{if hasID $.Form.Offers .ID}}checked{{end}}> {{.Label}}</label>
+            {{end}}
+          </div>
+        {{end}}
+      {{else}}
+        <p class="hint">Not offered anywhere yet. No place is bookable, so <a href="/places/bookable">choose the bookable places</a> first.</p>
+      {{end}}
+    </fieldset>
     <div class="field">
       <label for="notes">Notes <span class="optional">optional</span></label>
       <textarea id="notes" name="notes" rows="3" placeholder="Stacks 10 high, folds flat, needs the cart…">{{.Form.Notes}}</textarea>
     </div>
     <div class="form__actions">
-      <button type="submit" class="btn btn--primary">Save product</button>
-      <a class="btn btn--ghost" href="/products/{{.Form.ID}}">Cancel</a>
+      <button type="submit" class="btn btn--primary">{{if .Form.ID}}Save product{{else}}Add product{{end}}</button>
+      <a class="btn btn--ghost" href="{{if .Form.ID}}/products/{{.Form.ID}}{{else}}/products{{end}}">Cancel</a>
     </div>
   </form>
 </div>
-{{if .Others}}
+{{if and .Form.ID .Others}}
 <div class="card narrow">
   <h2 class="section__title">Merge into another product</h2>
   <p class="muted small">If these are the same thing under another name ("Chairs, folding" and "Folding chairs"), make every one of them an item of that product instead. It keeps its own name, category and counting; any IDs already used there are given new ones.</p>

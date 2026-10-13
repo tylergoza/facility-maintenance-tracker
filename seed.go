@@ -57,7 +57,7 @@ func seedDemo(st *store.Store) error {
 		}},
 		{"Fellowship Hall", "100 Church St (rear)", []room{
 			in("", "110", "Kitchen"), {kind: store.KindArea, name: "Classrooms", tags: []string{"kids"}},
-			in("Classrooms", "112", "Classroom 1"), in("Classrooms", "114", "Classroom 2"),
+			in("Classrooms", "112", "Classroom 1"), in("Classrooms", "114", "Classroom 2"), in("", "", "Storage"),
 		}, []item{
 			{"Commercial range hood", "Kitchen", "Kitchen", []task{{"Clean grease filters", "months", 3, 25, 65}, {"Fire suppression inspection", "months", 6, -30, 210}}},
 			{"Refrigerator", "Kitchen", "Kitchen", []task{{"Clean condenser coils", "months", 6, 100, 80}}},
@@ -113,6 +113,7 @@ func seedDemo(st *store.Store) error {
 			{"Troffers", "Lighting", "Classroom 1", 4, "LED T8 tubes", 2, false},
 			{"Air returns", "HVAC", "Classroom 1", 2, "Air filters 12x20x1", 1, false},
 			{"Portable TV cart", "Audio/Visual", "Classroom 2", 1, "", 0, true},
+			{"Inflatables", "Recreation", "Storage", 3, "", 0, true},
 		},
 	}
 	// Furniture that's only counted, not numbered, and moves for events.
@@ -167,12 +168,15 @@ func seedDemo(st *store.Store) error {
 		"Fellowship Hall": {"Fellowship Hall", "Kitchen", "Classroom 1", "Classroom 2"},
 	}
 
+	// Bookable places by name, for the products offered with them below.
+	placeIDs := map[string]int64{}
 	for _, bd := range data {
 		b := &store.Place{ParentID: site, Kind: store.KindBuilding, Name: bd.name, Address: bd.address,
 			Bookable: slices.Contains(bookable[bd.name], bd.name)}
 		if err := st.SavePlace(b); err != nil {
 			return err
 		}
+		placeIDs[bd.name] = b.ID
 		rooms := map[string]int64{"": b.ID}
 		for _, rn := range bd.rooms {
 			r := &store.Place{ParentID: rooms[rn.in], Kind: rn.kind, Number: rn.number, Name: rn.name, Tags: rn.tags,
@@ -184,6 +188,7 @@ func seedDemo(st *store.Store) error {
 				return err
 			}
 			rooms[rn.name] = r.ID
+			placeIDs[rn.name] = r.ID
 		}
 		supplyIDs := map[string]int64{}
 		for _, sp := range supplies[bd.name] {
@@ -247,6 +252,43 @@ func seedDemo(st *store.Store) error {
 			if err := st.SaveItem(i, nil, 0); err != nil {
 				return err
 			}
+		}
+	}
+
+	// What the church calendar lets people ask for with a room booking, and
+	// the bookable places each is offered with. Chairs, tables and
+	// inflatables are products already, from their items; sound and
+	// lighting are services with no items.
+	offered := func(names ...string) []int64 {
+		var ids []int64
+		for _, n := range names {
+			ids = append(ids, placeIDs[n])
+		}
+		return ids
+	}
+	hallRooms := []string{"Fellowship Hall", "Classroom 1", "Classroom 2"}
+	for _, o := range []struct {
+		name   string
+		places []string
+	}{
+		{"Folding tables", hallRooms},
+		{"Folding chairs", hallRooms},
+		{"Inflatables", []string{"Fellowship Hall"}},
+	} {
+		p, err := st.ProductByName(o.name)
+		if err != nil {
+			return err
+		}
+		p.Booking, p.Offers = store.BookingCount, offered(o.places...)
+		if err := st.SaveProduct(p); err != nil {
+			return err
+		}
+	}
+	for _, sv := range []struct{ name, category string }{{"Sound", "Audio/Visual"}, {"Lighting", "Lighting"}} {
+		p := &store.Product{Name: sv.name, Category: sv.category, Booking: store.BookingService,
+			Offers: offered("Fellowship Hall")}
+		if err := st.CreateProduct(p); err != nil {
+			return err
 		}
 	}
 	return nil

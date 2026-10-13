@@ -7,6 +7,7 @@
   <div>
     <h1>{{$i.Name}}{{if gt $i.Quantity 1}} <span class="muted">× {{$i.Quantity}}</span>{{end}}</h1>
     <p class="muted">{{if $i.Category}}{{$i.Category}} · {{end}}{{$i.Location}}{{if $i.Portable}} · <span class="badge">Portable</span>{{end}}{{if $i.Counted}} · <span class="badge">Counted</span>{{end}}</p>
+    <p class="small">{{if .Product.Booking}}On the church calendar: {{.Product.BookingLabel}} · <a href="/products/{{.Product.ID}}/edit">Change</a>{{else}}<a href="/products/{{.Product.ID}}/edit">Offer on the calendar</a>{{end}}</p>
     {{if gt .Product.ItemCount 1}}<p class="small"><a href="/products/{{.Product.ID}}">{{.Product.Total}} {{.Product.Name}} in all</a> <span class="muted">across {{pluralize .Product.PlaceCount "place"}}</span></p>{{end}}
   </div>
   <div class="page-head__actions">

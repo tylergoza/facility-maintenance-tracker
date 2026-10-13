@@ -12,9 +12,22 @@
     <a class="btn btn--ghost btn--sm" href="/products/{{$p.ID}}/edit">Edit</a>
   </div>
 </div>
+{{if $p.Booking}}<div class="card"><p>On the church calendar: {{$p.BookingLabel}}.</p></div>{{end}}
+{{if .NonPortable}}
+<div class="card">
+  <p><strong>These can't be moved for a set-up: make them portable.</strong></p>
+  <ul>{{range .NonPortable}}<li><a href="/items/{{.ID}}/edit">{{.Name}}{{if .Location}} · {{.Location}}{{end}}</a></li>{{end}}</ul>
+</div>
+{{end}}
 {{if $p.Notes}}<div class="card"><div class="notes">{{range lines $p.Notes}}<p>{{.}}</p>{{end}}</div></div>{{end}}
 <section class="section">
   <h2 class="section__title">Where they are <span class="count">{{len .Items}}</span></h2>
-  {{template "item-table" (dict "Items" .Items "ShowLocation" true "ShowCategory" false "Next" .URI)}}
+  {{if .Items}}
+    {{template "item-table" (dict "Items" .Items "ShowLocation" true "ShowCategory" false "Next" .URI)}}
+  {{else if eq $p.Booking "service"}}
+    <div class="empty"><p>A service: no items.</p></div>
+  {{else}}
+    <div class="empty"><p>No items yet.</p></div>
+  {{end}}
 </section>
 {{end}}

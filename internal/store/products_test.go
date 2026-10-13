@@ -272,3 +272,187 @@ func TestItemReportSettingMigration(t *testing.T) {
 		s.Close()
 	}
 }
+
+func bookable(t *testing.T, s *Store, ids ...int64) {
+	t.Helper()
+	must(t, s.SetBookable(ids, true))
+}
+
+func TestProductBookingOffers(t *testing.T) {
+	s := openTest(t)
+	b := building(t, s, "Main")
+	hall, gym := addPlace(t, s, b, KindRoom, "", "Hall"), addPlace(t, s, b, KindRoom, "", "Gym")
+	bookable(t, s, b.ID, hall.ID)
+
+	tables := &Item{PlaceID: gym.ID, Name: "Tables", Quantity: 8, Portable: true}
+	must(t, s.SaveItem(tables, nil, 0))
+	prod, err := s.GetProduct(tables.ProductID)
+	must(t, err)
+	if prod.Booking != "" || len(prod.Offers) != 0 || prod.BookingLabel() != "Not offered" {
+		t.Fatalf("new product = %+v", prod)
+	}
+
+	// Not bookable: refused, and nothing is written.
+	prod.Booking, prod.Offers = BookingCount, []int64{hall.ID, gym.ID}
+	if err := s.SaveProduct(prod); !errors.Is(err, ErrOfferNotBookable) {
+		t.Fatalf("err = %v", err)
+	}
+	if got, _ := s.GetProduct(prod.ID); got.Booking != "" || len(got.Offers) != 0 {
+		t.Errorf("after refused save = %+v", got)
+	}
+	prod.Booking = "bogus"
+	if err := s.SaveProduct(prod); err == nil {
+		t.Error("bad booking value accepted")
+	}
+
+	// A bookable building is allowed and doesn't add its rooms.
+	prod.Booking, prod.Offers = BookingCount, []int64{b.ID}
+	must(t, s.SaveProduct(prod))
+	got, _ := s.GetProduct(prod.ID)
+	if got.Booking != BookingCount || len(got.Offers) != 1 || got.Offers[0] != b.ID || got.BookingLabel() != "Ask how many" {
+		t.Fatalf("saved = %+v", got)
+	}
+	prod.Offers = []int64{hall.ID, b.ID}
+	must(t, s.SaveProduct(prod))
+	ps, err := s.ListProducts(ProductFilter{BookingOnly: true})
+	must(t, err)
+	if len(ps) != 1 || len(ps[0].Offers) != 2 || ps[0].Total != 8 {
+		t.Fatalf("booking products = %+v", ps)
+	}
+
+	// Unbookable: drops out of Offers, kept, and back when bookable again.
+	must(t, s.SetBookable([]int64{hall.ID}, false))
+	if got, _ := s.GetProduct(prod.ID); len(got.Offers) != 1 || got.Offers[0] != b.ID {
+		t.Errorf("offers = %v", got.Offers)
+	}
+	if at, _ := s.ProductsOfferedAt(hall.ID); len(at) != 1 || at[0].ID != prod.ID {
+		t.Errorf("offered at hall = %+v", at)
+	}
+	// Saving leaves the hidden row alone.
+	got, _ = s.GetProduct(prod.ID)
+	got.Offers = []int64{b.ID}
+	must(t, s.SaveProduct(got))
+	bookable(t, s, hall.ID)
+	if got, _ := s.GetProduct(prod.ID); len(got.Offers) != 2 {
+		t.Errorf("offers after re-bookable = %v", got.Offers)
+	}
+
+	// Cleared booking keeps offers but leaves the booking list.
+	got, _ = s.GetProduct(prod.ID)
+	got.Booking = ""
+	must(t, s.SaveProduct(got))
+	if ps, _ := s.ListProducts(ProductFilter{BookingOnly: true}); len(ps) != 0 {
+		t.Errorf("booking products = %+v", ps)
+	}
+	if got, _ := s.GetProduct(prod.ID); len(got.Offers) != 2 {
+		t.Errorf("offers = %v", got.Offers)
+	}
+	if at, _ := s.ProductsOfferedAt(hall.ID); len(at) != 0 {
+		t.Errorf("offered at hall = %+v", at)
+	}
+
+	// Booking set but no offers: not listed.
+	got.Booking, got.Offers = BookingCount, []int64{b.ID}
+	must(t, s.SaveProduct(got))
+	must(t, s.SetBookable([]int64{hall.ID, b.ID}, false))
+	if ps, _ := s.ListProducts(ProductFilter{BookingOnly: true}); len(ps) != 0 {
+		t.Errorf("booking products with no bookable offers = %+v", ps)
+	}
+	bookable(t, s, hall.ID, b.ID)
+	if ps, _ := s.ListProducts(ProductFilter{BookingOnly: true}); len(ps) != 1 {
+		t.Errorf("booking products = %+v", ps)
+	}
+
+	// Deleting a place cascades the offer away.
+	if _, err := s.DB.Exec(`DELETE FROM places WHERE id = ?`, hall.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	must(t, s.DB.QueryRow(`SELECT COUNT(*) FROM product_offers WHERE place_id = ?`, hall.ID).Scan(&n))
+	if n != 0 {
+		t.Error("offer survived its place")
+	}
+}
+
+func TestProductBookingCheck(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.DB.Exec(`INSERT INTO products (name, booking) VALUES ('X', 'nope')`); err == nil {
+		t.Error("CHECK accepted a bad booking value")
+	}
+	if _, err := s.DB.Exec(`INSERT INTO products (name, booking) VALUES ('Y', 'service')`); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestServiceProductWithNoItems(t *testing.T) {
+	s := openTest(t)
+	b := building(t, s, "Main")
+	bookable(t, s, b.ID)
+	sound := &Product{Name: "Sound", Booking: BookingService, Offers: []int64{b.ID}}
+	must(t, s.CreateProduct(sound))
+	if sound.ID == 0 {
+		t.Fatal("no ID")
+	}
+	if err := s.CreateProduct(&Product{Name: "sound"}); !errors.Is(err, ErrProductExists) {
+		t.Errorf("duplicate err = %v", err)
+	}
+	if err := s.CreateProduct(&Product{Name: "Bad", Offers: []int64{9999}}); !errors.Is(err, ErrOfferNotBookable) {
+		t.Errorf("bad offer err = %v", err)
+	}
+	if got, err := s.ProductByName("Sound"); err != nil || got.BookingLabel() != "Ask yes or no" || got.Total != 0 {
+		t.Errorf("sound = %+v, %v", got, err)
+	}
+
+	// Item edits and deletes don't sweep it away; plain empty products go.
+	it := &Item{PlaceID: b.ID, Name: "Chairs", Quantity: 2}
+	must(t, s.SaveItem(it, nil, 0))
+	it.Name = "Stools"
+	must(t, s.SaveItem(it, nil, 0))
+	must(t, s.DeleteItem(it.ID))
+	if _, err := s.GetProduct(sound.ID); err != nil {
+		t.Errorf("service product lost: %v", err)
+	}
+	if _, err := s.ProductByName("Chairs"); err == nil {
+		t.Error("empty plain product should be dropped")
+	}
+}
+
+func TestNonPortableItemsAndTotals(t *testing.T) {
+	s := openTest(t)
+	b := building(t, s, "Main")
+	hall := addPlace(t, s, b, KindRoom, "", "Hall")
+	must(t, s.SaveItem(&Item{PlaceID: hall.ID, Name: "Tables", Quantity: 4, Portable: true}, nil, 0))
+	fixed := &Item{PlaceID: b.ID, Name: "Tables", Quantity: 3}
+	must(t, s.SaveItem(fixed, nil, 0))
+	must(t, s.SaveItem(&Item{PlaceID: hall.ID, Name: "Cots", Category: "Beds", Counted: true, Quantity: 5}, nil, 0))
+	must(t, s.SaveItem(&Item{PlaceID: hall.ID, Name: "Cots", Quantity: 6}, nil, 0))
+
+	tables, _ := s.ProductByName("Tables")
+	np, err := s.NonPortableItems(tables.ID)
+	must(t, err)
+	if len(np) != 1 || np[0].ID != fixed.ID {
+		t.Errorf("non-portable = %+v", np)
+	}
+	if tables.Total != 7 {
+		t.Errorf("tracked total = %d", tables.Total)
+	}
+	if cots, _ := s.ProductByName("Cots"); !cots.Counted || cots.Total != 11 {
+		t.Errorf("counted total = %+v", cots)
+	}
+}
+
+func TestMergeProductCarriesOffers(t *testing.T) {
+	s := openTest(t)
+	b := building(t, s, "Main")
+	bookable(t, s, b.ID)
+	a := &Product{Name: "A"}
+	must(t, s.CreateProduct(a))
+	c := &Product{Name: "C", Booking: BookingService, Offers: []int64{b.ID}}
+	must(t, s.CreateProduct(c))
+	must(t, s.MergeProduct(c.ID, a.ID))
+	got, err := s.GetProduct(a.ID)
+	must(t, err)
+	if got.Booking != BookingService || len(got.Offers) != 1 {
+		t.Errorf("merged = %+v", got)
+	}
+}
