@@ -455,6 +455,7 @@ select:disabled { opacity: .6; }
   background: var(--surface-2); color: var(--text); font-size: .8rem; font-weight: 500; text-decoration: none;
 }
 a.chip:hover { border-color: var(--primary); }
+.chip--on { border-color: var(--primary); background: var(--primary); color: var(--primary-text); }
 .chip--lg { font-size: 1rem; padding: 2px 14px; vertical-align: middle; }
 .place-filter { margin-bottom: 6px; }
 .also-in summary { cursor: pointer; font-weight: 600; }

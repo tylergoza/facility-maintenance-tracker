@@ -4,13 +4,14 @@
 <div class="page-head">
   <div>
     <h1>{{$p.Label}}</h1>
-    <p class="muted">{{$p.KindLabel}}{{if $p.Address}} · {{$p.Address}}{{end}} {{template "tag-chips" $p.Tags}}</p>
+    <p class="muted">{{$p.KindLabel}}{{if $p.Bookable}} <span class="chip">Bookable</span>{{end}}{{if $p.Address}} · {{$p.Address}}{{end}} {{template "tag-chips" $p.Tags}}</p>
     {{if .AlsoIn}}<p class="small">Shared: also in {{range $i, $o := .AlsoIn}}{{if $i}}, {{end}}<a href="/places/{{$o.ID}}">{{$o.Path}}</a>{{end}}</p>{{end}}
   </div>
   <div class="page-head__actions">
     <a class="btn btn--primary btn--sm" href="/items/new?place={{$p.ID}}">Add item</a>
     <a class="btn btn--sm" href="/report?place={{$p.ID}}">Report a problem</a>
     <a class="btn btn--sm" href="/places/{{$p.ID}}/qr">QR code</a>
+    {{if and .Children (eq $p.Kind "building")}}<a class="btn btn--sm" href="/places/bookable?parent={{$p.ID}}">Choose bookable rooms</a>{{end}}
     <a class="btn btn--ghost btn--sm" href="/places/{{$p.ID}}/edit">Edit</a>
     {{if $p.ParentID}}
       {{template "delete-button" (dict "Action" (printf "/places/%d/delete" $p.ID) "CSRF" .CSRF "Label" "Delete" "Confirm" (printf "Delete %s? Anything in it (places, items, supplies, problems) moves up to %s." $p.Label .Parent.Label))}}

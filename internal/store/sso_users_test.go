@@ -24,7 +24,14 @@ func TestSSOMigrationKeepsReferences(t *testing.T) {
 	bobID, err := old.CreateUser("bob", "", "a long password", false)
 	must(t, err)
 
-	b := building(t, old, "Sanctuary")
+	// Raw SQL: today's SavePlace writes columns v15 doesn't have.
+	res, err := old.DB.Exec(`INSERT INTO places (kind, name) VALUES ('site', 'Campus')`)
+	must(t, err)
+	siteID, _ := res.LastInsertId()
+	res, err = old.DB.Exec(`INSERT INTO places (parent_id, kind, name) VALUES (?, 'building', 'Sanctuary')`, siteID)
+	must(t, err)
+	bID, _ := res.LastInsertId()
+	b := &Place{ID: bID}
 	item := &Item{PlaceID: b.ID, Name: "Furnace"}
 	must(t, old.SaveItem(item, nil, 0))
 	must(t, old.RecordMaintenance(Completion{ItemID: item.ID, PerformedOn: "2026-09-15"}))

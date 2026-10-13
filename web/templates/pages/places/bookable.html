@@ -1,0 +1,33 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/places">Places</a>{{if .Parent.ID}} › <a href="/places/{{.Parent.ID}}">{{.Parent.Label}}</a>{{end}}</nav>
+<div class="page-head">
+  <div>
+    <h1>{{.Title}}</h1>
+    <p class="muted">Tick the places the church calendar can offer on its room request form{{if .Parent.ID}}, inside {{.Parent.Label}}{{end}}. The planners can always use every room.</p>
+  </div>
+</div>
+{{if .Places}}
+<form method="post" action="/places/bookable" class="form">
+  {{template "csrf" .CSRF}}
+  {{if .Parent.ID}}<input type="hidden" name="parent" value="{{.Parent.ID}}">{{end}}
+  <ul class="tree">
+    {{range .Places}}
+      <li class="tree__row tree__row--d{{.Depth}}">
+        <label class="check tree__main">
+          <input type="checkbox" name="id" value="{{.ID}}" {{if .Bookable}}checked{{end}}> <strong>{{.Label}}</strong>
+          <span class="kind">{{.KindLabel}}</span>
+          {{if .Bookable}}<span class="chip">bookable</span>{{end}}
+        </label>
+      </li>
+    {{end}}
+  </ul>
+  <div class="form__actions">
+    <button type="submit" name="mark" value="on" class="btn btn--primary">Mark bookable</button>
+    <button type="submit" name="mark" value="off" class="btn">Mark not bookable</button>
+    <a class="btn btn--ghost" href="{{if .Parent.ID}}/places/{{.Parent.ID}}{{else}}/places{{end}}">Back</a>
+  </div>
+</form>
+{{else}}
+  <div class="empty"><h2>No buildings, rooms or areas yet</h2></div>
+{{end}}
+{{end}}

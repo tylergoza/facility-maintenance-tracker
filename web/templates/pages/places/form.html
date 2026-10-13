@@ -42,6 +42,10 @@
       <label for="address">Address <span class="optional">optional</span></label>
       <input id="address" name="address" value="{{.Form.Address}}" autocomplete="street-address">
     </div>
+    <div class="field" data-reveal-target="section" data-reveal-when="kind=building kind=room kind=area">
+      <label class="check"><input type="checkbox" name="bookable" value="1" {{if .Form.Bookable}}checked{{end}}> Can be booked on the church calendar</label>
+      <p class="hint">The church calendar lists it on its room request form. The planners can always use every room.</p>
+    </div>
     <div class="field">
       <label for="tags">Tags <span class="optional">optional</span></label>
       <input id="tags" name="tags" value="{{.Form.TagText}}" placeholder="e.g. classrooms, media">

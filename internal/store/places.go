@@ -77,6 +77,12 @@ func KindHint(kind string) string {
 	return ""
 }
 
+// CanBeBookable reports whether places of this kind can be marked
+// bookable on the church calendar: buildings, rooms and areas.
+func CanBeBookable(kind string) bool {
+	return kind == KindBuilding || kind == KindRoom || kind == KindArea
+}
+
 // kindRank orders siblings: floors, then rooms, then areas.
 var kindRank = map[string]int{KindSite: 0, KindBuilding: 1, KindFloor: 2, KindRoom: 3, KindArea: 4}
 
@@ -105,6 +111,7 @@ type Place struct {
 	Notes    string
 	Tags     []string
 	AlsoIn   []int64 // areas only: other places a shared area is in
+	Bookable bool    // buildings, rooms and areas only: can be booked on the church calendar
 
 	// Filled in from the whole tree (see Places).
 	Path      string // "Main Building › 2nd floor › 104 – Nursery"
@@ -145,7 +152,7 @@ type querier interface {
 
 // loadPlaces reads the tree without tags or counts.
 func loadPlaces(q querier) (*Places, error) {
-	rows, err := q.Query(`SELECT id, COALESCE(parent_id, 0), kind, number, name, address, notes FROM places`)
+	rows, err := q.Query(`SELECT id, COALESCE(parent_id, 0), kind, number, name, address, notes, bookable FROM places`)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +160,7 @@ func loadPlaces(q querier) (*Places, error) {
 	t := &Places{byID: map[int64]*Place{}, children: map[int64][]*Place{}, linked: map[int64][]*Place{}}
 	for rows.Next() {
 		p := &Place{}
-		if err := rows.Scan(&p.ID, &p.ParentID, &p.Kind, &p.Number, &p.Name, &p.Address, &p.Notes); err != nil {
+		if err := rows.Scan(&p.ID, &p.ParentID, &p.Kind, &p.Number, &p.Name, &p.Address, &p.Notes, &p.Bookable); err != nil {
 			return nil, err
 		}
 		t.byID[p.ID] = p
@@ -452,6 +459,17 @@ func (t *Places) Tagged(tag string) []Place {
 	return out
 }
 
+// Bookable returns the places marked bookable, in tree order.
+func (t *Places) Bookable() []Place {
+	var out []Place
+	for _, p := range t.list {
+		if p.Bookable {
+			out = append(out, *p)
+		}
+	}
+	return out
+}
+
 // TagCount is a tag and how many places have it.
 type TagCount struct {
 	Name  string
@@ -543,16 +561,17 @@ func (s *Store) AddPlaces(places []Place) error {
 
 func savePlaceTx(tx *sql.Tx, p *Place) error {
 	p.Name, p.Number = strings.TrimSpace(p.Name), strings.TrimSpace(p.Number)
-	args := []any{nullInt(p.ParentID), p.Kind, p.Number, p.Name, p.Address, p.Notes}
+	p.Bookable = p.Bookable && CanBeBookable(p.Kind)
+	args := []any{nullInt(p.ParentID), p.Kind, p.Number, p.Name, p.Address, p.Notes, p.Bookable}
 	if p.ID == 0 {
-		res, err := tx.Exec(`INSERT INTO places (parent_id, kind, number, name, address, notes) VALUES (?, ?, ?, ?, ?, ?)`, args...)
+		res, err := tx.Exec(`INSERT INTO places (parent_id, kind, number, name, address, notes, bookable) VALUES (?, ?, ?, ?, ?, ?, ?)`, args...)
 		if err != nil {
 			return err
 		}
 		if p.ID, err = res.LastInsertId(); err != nil {
 			return err
 		}
-	} else if _, err := tx.Exec(`UPDATE places SET parent_id = ?, kind = ?, number = ?, name = ?, address = ?, notes = ? WHERE id = ?`, append(args, p.ID)...); err != nil {
+	} else if _, err := tx.Exec(`UPDATE places SET parent_id = ?, kind = ?, number = ?, name = ?, address = ?, notes = ?, bookable = ? WHERE id = ?`, append(args, p.ID)...); err != nil {
 		return err
 	}
 	// Only areas can be shared, and never with the place they live in.
@@ -581,6 +600,22 @@ func savePlaceTx(tx *sql.Tx, p *Place) error {
 	}
 	_, err := tx.Exec(`DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM place_tags)`)
 	return err
+}
+
+// SetBookable marks several places bookable (or not) at once. Sites and
+// floors are skipped: they're never bookable.
+func (s *Store) SetBookable(ids []int64, on bool) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec(`UPDATE places SET bookable = ? WHERE id = ? AND kind IN (?, ?, ?)`, on, id, KindBuilding, KindRoom, KindArea); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ParseTags splits "Classrooms, media" into tags, tidying spaces and
