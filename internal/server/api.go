@@ -166,6 +166,7 @@ type apiPlaceJSON struct {
 	ID       int64    `json:"id"`
 	ParentID *int64   `json:"parent_id"`
 	Kind     string   `json:"kind"`
+	Bookable bool     `json:"bookable"`
 	Number   string   `json:"number"`
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`
@@ -213,7 +214,7 @@ func suppliesJSON(supplies []store.Supply) []apiSupplyJSON {
 }
 
 func placeJSON(p store.Place) apiPlaceJSON {
-	out := apiPlaceJSON{ID: p.ID, Kind: p.Kind, Number: p.Number, Name: p.Name, Path: p.Path, Address: p.Address, Notes: p.Notes,
+	out := apiPlaceJSON{ID: p.ID, Kind: p.Kind, Bookable: p.Bookable, Number: p.Number, Name: p.Name, Path: p.Path, Address: p.Address, Notes: p.Notes,
 		Tags: p.Tags, AlsoIn: p.AlsoIn}
 	if p.ParentID != 0 {
 		out.ParentID = &p.ParentID
@@ -330,7 +331,8 @@ func (s *Server) apiSupply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, supplyJSON(*sp))
 }
 
-// apiPlaces: GET /api/v1/places?tag=, every place in tree order.
+// apiPlaces: GET /api/v1/places?tag=&bookable=1, every place in tree order.
+// bookable=1 keeps only places the church calendar can book; with tag, both apply.
 func (s *Server) apiPlaces(w http.ResponseWriter, r *http.Request) {
 	tree, err := s.store.Places()
 	if err != nil {
@@ -341,11 +343,25 @@ func (s *Server) apiPlaces(w http.ResponseWriter, r *http.Request) {
 	if tag := r.URL.Query().Get("tag"); tag != "" {
 		places = tree.Tagged(tag)
 	}
+	if apiBool(r.URL.Query().Get("bookable")) {
+		places = keepBookable(places)
+	}
 	out := make([]apiPlaceJSON, len(places))
 	for k, p := range places {
 		out[k] = placeJSON(p)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"places": out})
+}
+
+// keepBookable returns the bookable places from places, in the same order.
+func keepBookable(places []store.Place) []store.Place {
+	out := []store.Place{}
+	for _, p := range places {
+		if p.Bookable {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // apiPlace: GET /api/v1/places/{id}?direct=1, with the items and supplies

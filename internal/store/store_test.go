@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -766,5 +767,38 @@ func TestZonesBecomeAreas(t *testing.T) {
 	}
 	if p, _ := tree.Get(4); p.Path != "Main › East wing › Nursery" {
 		t.Errorf("nursery = %+v", p)
+	}
+}
+
+func TestBookable(t *testing.T) {
+	s := openTest(t)
+	site := addPlace(t, s, nil, KindSite, "", "Grace Church")
+	main := addPlace(t, s, site, KindBuilding, "", "Main")
+	floor := addPlace(t, s, main, KindFloor, "", "1st floor")
+	room := addPlace(t, s, floor, KindRoom, "101", "Nursery")
+	porch := addPlace(t, s, main, KindArea, "", "Porch")
+
+	// Saved from the form: sites and floors never keep it.
+	for _, p := range []*Place{site, floor, room} {
+		p.Bookable = true
+		must(t, s.SavePlace(p))
+	}
+	if site.Bookable || floor.Bookable || !room.Bookable {
+		t.Fatalf("after save: site %v floor %v room %v", site.Bookable, floor.Bookable, room.Bookable)
+	}
+	// Bulk: sites and floors are skipped.
+	must(t, s.SetBookable([]int64{site.ID, floor.ID, main.ID, porch.ID}, true))
+	must(t, s.SetBookable([]int64{room.ID}, false))
+	tree, err := s.Places()
+	must(t, err)
+	var got []string
+	for _, p := range tree.Bookable() {
+		got = append(got, p.Name)
+	}
+	if strings.Join(got, ",") != "Main,Porch" {
+		t.Fatalf("bookable = %v", got)
+	}
+	if p, _ := tree.Get(room.ID); p.Bookable {
+		t.Fatal("room should no longer be bookable")
 	}
 }

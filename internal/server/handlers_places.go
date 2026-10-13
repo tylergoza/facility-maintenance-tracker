@@ -20,8 +20,9 @@ func (s *Server) handlePlaces(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	onlyBookable := r.URL.Query().Get("bookable") == "1"
 	if tag := r.URL.Query().Get("tag"); tag != "" {
-		s.renderTag(w, r, tree, tag)
+		s.renderTag(w, r, tree, tag, onlyBookable)
 		return
 	}
 	tasks, err := s.store.ListTasks(store.TaskFilter{ActiveOnly: true})
@@ -34,17 +35,25 @@ func (s *Server) handlePlaces(w http.ResponseWriter, r *http.Request) {
 		health[h.ID] = h
 	}
 	_, single := tree.SingleSite()
+	places := tree.All()
+	if onlyBookable {
+		places = tree.Bookable()
+	}
 	s.render(w, r, http.StatusOK, "places/index", map[string]any{
-		"Title": "Places", "Places": tree.All(), "Tags": tree.Tags(), "Health": health, "SingleSite": single,
+		"Title": "Places", "Places": places, "OnlyBookable": onlyBookable, "Tags": tree.Tags(), "Health": health, "SingleSite": single,
 	})
 }
 
 // renderTag lists the places with a tag and what's reported in them.
-func (s *Server) renderTag(w http.ResponseWriter, r *http.Request, tree *store.Places, tag string) {
+func (s *Server) renderTag(w http.ResponseWriter, r *http.Request, tree *store.Places, tag string, onlyBookable bool) {
 	places := tree.Tagged(tag)
 	if len(places) == 0 {
 		s.notFound(w, r)
 		return
+	}
+	title := places[0].Tags[slices.IndexFunc(places[0].Tags, func(t string) bool { return strings.EqualFold(t, tag) })]
+	if onlyBookable {
+		places = slices.DeleteFunc(places, func(p store.Place) bool { return !p.Bookable })
 	}
 	problems, err := s.store.ListProblems(store.ProblemFilter{Tag: tag, Status: "active"})
 	if err != nil {
@@ -57,7 +66,7 @@ func (s *Server) renderTag(w http.ResponseWriter, r *http.Request, tree *store.P
 		total += p.ProblemTotal
 	}
 	s.render(w, r, http.StatusOK, "places/tag", map[string]any{
-		"Title": "Tagged “" + tag + "”", "Tag": places[0].Tags[slices.IndexFunc(places[0].Tags, func(t string) bool { return strings.EqualFold(t, tag) })],
+		"Title": "Tagged “" + tag + "”", "Tag": title, "OnlyBookable": onlyBookable,
 		"Places": places, "Problems": problems, "ItemTotal": items,
 	})
 }
@@ -110,6 +119,7 @@ func (s *Server) placeFromForm(r *http.Request, f *placeForm) []string {
 	if f.Kind == store.KindSite {
 		f.Number = ""
 	}
+	f.Bookable = store.CanBeBookable(f.Kind) && r.PostFormValue("bookable") != ""
 	f.Tags = store.ParseTags(f.TagText)
 	f.AlsoIn = nil
 	if f.Kind == store.KindArea {
@@ -361,6 +371,7 @@ type bulkPlacesForm struct {
 	ParentID int64
 	Kind     string
 	Lines    string
+	Bookable bool
 }
 
 func (s *Server) renderBulkForm(w http.ResponseWriter, r *http.Request, status int, f bulkPlacesForm, errs []string) {
@@ -383,7 +394,7 @@ func parseBulkPlaces(f bulkPlacesForm) ([]store.Place, []string) {
 		if line == "" {
 			continue
 		}
-		p := store.Place{ParentID: f.ParentID, Kind: f.Kind, Name: line}
+		p := store.Place{ParentID: f.ParentID, Kind: f.Kind, Name: line, Bookable: f.Bookable && store.CanBeBookable(f.Kind)}
 		if i := strings.IndexAny(line, ",\t"); i >= 0 {
 			p.Number, p.Name = strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:])
 		}
@@ -408,7 +419,8 @@ func (s *Server) handlePlaceBulkNew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePlaceBulkCreate(w http.ResponseWriter, r *http.Request) {
-	f := bulkPlacesForm{ParentID: formInt(r, "parent_id"), Kind: formStr(r, "kind"), Lines: r.PostFormValue("lines")}
+	f := bulkPlacesForm{ParentID: formInt(r, "parent_id"), Kind: formStr(r, "kind"), Lines: r.PostFormValue("lines"),
+		Bookable: r.PostFormValue("bookable") != ""}
 	places, errs := parseBulkPlaces(f)
 	check := store.Place{ParentID: f.ParentID, Kind: f.Kind}
 	if f.Kind == store.KindSite {
@@ -427,6 +439,60 @@ func (s *Server) handlePlaceBulkCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirect(w, r, fmt.Sprintf("/places/%d", check.ParentID), pluralize(len(places), f.Kind)+" added.")
+}
+
+// Choose bookable: tick the places the church calendar may offer, then
+// mark them all at once. ?parent= limits the list to one place's insides.
+
+func (s *Server) handlePlacesBookable(w http.ResponseWriter, r *http.Request) {
+	tree, err := s.store.Places()
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	places := tree.All()
+	var parent store.Place
+	if id := queryInt(r, "parent"); id != 0 {
+		var ok bool
+		if parent, ok = tree.Get(id); !ok {
+			s.notFound(w, r)
+			return
+		}
+		places = tree.Inside(id)
+	}
+	places = slices.DeleteFunc(slices.Clone(places), func(p store.Place) bool { return !store.CanBeBookable(p.Kind) })
+	s.render(w, r, http.StatusOK, "places/bookable", map[string]any{
+		"Title": "Choose bookable places", "Places": places, "Parent": parent,
+	})
+}
+
+func (s *Server) handlePlacesBookableSave(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	var ids []int64
+	for _, v := range r.PostForm["id"] {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	back := "/places/bookable"
+	if parent := formInt(r, "parent"); parent != 0 {
+		back += fmt.Sprintf("?parent=%d", parent)
+	}
+	if len(ids) == 0 {
+		s.setFlash(w, r, "error", "Tick the places first.")
+		http.Redirect(w, r, back, http.StatusSeeOther)
+		return
+	}
+	on := r.PostFormValue("mark") == "on"
+	if err := s.store.SetBookable(ids, on); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	msg := pluralize(len(ids), "place") + " marked bookable."
+	if !on {
+		msg = pluralize(len(ids), "place") + " marked not bookable."
+	}
+	s.redirect(w, r, back, msg)
 }
 
 // Old links ------------------------------------------------------------------

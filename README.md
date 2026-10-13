@@ -56,7 +56,7 @@ running for the rest to work.
 |---------------|--------------|---------------------|
 | Nothing (alone) | Everything in the table above, with local passwords | All of its data: places, items, tasks, users |
 | User Management (SSO) | Sign in with a church account; admins manage this app's people from **Users** | A local user row for each person (linked by their User Management ID), so logs and problems stay theirs; local login stays as a break-glass |
-| Church calendar | **Coming up here** on a room's page, and a warning on maintenance due on a booked day | Nothing from the calendar is stored; it's asked when a page opens (cached a minute) |
+| Church calendar | **Coming up here** on a room's page, and a warning on maintenance due on a booked day; places marked **Can be booked** appear on its room request form | Nothing from the calendar is stored; it's asked when a page opens (cached a minute) |
 
 Going the other way, the church calendar can import rooms from this app, and
 the event and production planners read products, items and supplies from it.
@@ -515,7 +515,7 @@ Everything is read-only JSON under `/api/v1/`:
 | `GET /items` | Items. Filters: `q`, `place` (with `direct=1` for only that place, not inside it), `tag`, `product`, `portable=1`. |
 | `GET /items/{id}` | An item, with its `units` (number, ID, note) unless it's counted. |
 | `GET /supplies`, `GET /supplies/{id}` | Supplies with `on_hand`, `in_use`, `cleaning`, `total`, `stock` (`ok`, `low`, `out`) and `requested` (when someone asked for more, or `null`). Filters as for items, plus `low=1` (low, out or asked for). |
-| `GET /places`, `GET /places/{id}` | Places in tree order (`parent_id`, `kind`, `path`, `tags`, `also_in`); one place adds its `children` and the `items` and `supplies` in it (or `direct=1`). |
+| `GET /places`, `GET /places/{id}` | Places in tree order (`parent_id`, `kind`, `path`, `tags`, `also_in`, `bookable`); one place adds its `children` and the `items` and `supplies` in it (or `direct=1`). Filters on the list: `tag`, `bookable=1` (only places marked **Can be booked**; combines with `tag`). |
 
 Errors come back as `{"error": "…"}`: 401 for a missing or revoked token, 400
 for a place that doesn't exist, 404 for anything else not found.

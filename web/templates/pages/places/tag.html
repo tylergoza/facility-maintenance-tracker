@@ -3,7 +3,7 @@
 <div class="page-head">
   <div>
     <h1>Tagged <span class="chip chip--lg">{{.Tag}}</span></h1>
-    <p class="muted">{{pluralize (len .Places) "place"}} · {{pluralize .ItemTotal "item"}} in them</p>
+    <p class="muted">{{if .OnlyBookable}}Bookable only · {{end}}{{pluralize (len .Places) "place"}} · {{pluralize .ItemTotal "item"}} in them</p>
   </div>
   <div class="page-head__actions">
     <a class="btn btn--sm" href="/items?tag={{.Tag}}">Items</a>

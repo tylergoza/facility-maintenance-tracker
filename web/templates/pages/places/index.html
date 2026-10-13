@@ -9,9 +9,13 @@
     {{if .Places}}<a class="btn btn--ghost btn--sm" href="/places/new?kind=site">Add a site</a>{{end}}
   </div>
 </div>
+<p class="chips"><span class="muted small">Show:</span>
+  <a class="chip{{if .OnlyBookable}} chip--on{{end}}" href="/places{{if not .OnlyBookable}}?bookable=1{{end}}">Bookable</a>
+  <a class="chip" href="/places/bookable">Choose bookable places</a>
+</p>
 {{if .Tags}}
   <p class="chips"><span class="muted small">Tags:</span>
-    {{range .Tags}}<a class="chip" href="/places?tag={{.Name}}">{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}
+    {{range .Tags}}<a class="chip" href="/places?tag={{.Name}}{{if $.OnlyBookable}}&amp;bookable=1{{end}}">{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}
   </p>
 {{end}}
 {{if .Places}}
@@ -22,6 +26,7 @@
         <div class="tree__main">
           <a href="/places/{{.ID}}"><strong>{{.Label}}</strong></a>
           <span class="kind">{{if and $.SingleSite (eq .Kind "site")}}Whole site{{else}}{{.KindLabel}}{{end}}</span>
+          {{if .Bookable}}<span class="chip">bookable</span>{{end}}
           {{if .Shared}}<span class="chip">shared with {{pluralize (len .AlsoIn) "other place"}}</span>{{end}}
           {{template "tag-chips" .Tags}}
         </div>
@@ -34,7 +39,12 @@
       </li>
     {{end}}
   </ul>
-  <p class="hint">Buildings go on a site. Floors, rooms and areas go in buildings, and can nest: rooms on floors, areas anywhere (a porch outside, a wing holding rooms, a stage in a room). A shared area, like a stairwell, can be in more than one place. Tags group places across buildings, like "classrooms".</p>
+  {{if not .OnlyBookable}}<p class="hint">Buildings go on a site. Floors, rooms and areas go in buildings, and can nest: rooms on floors, areas anywhere (a porch outside, a wing holding rooms, a stage in a room). A shared area, like a stairwell, can be in more than one place. Tags group places across buildings, like "classrooms".</p>{{end}}
+{{else if .OnlyBookable}}
+  <div class="empty">
+    <h2>Nothing is bookable yet</h2>
+    <p><a class="btn btn--primary" href="/places/bookable">Choose bookable places</a></p>
+  </div>
 {{else}}
   <div class="empty">
     <h2>No places yet</h2>

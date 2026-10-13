@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
@@ -159,14 +160,23 @@ func seedDemo(st *store.Store) error {
 		return err
 	}
 
+	// Spaces the public can ask to book on the church calendar, by
+	// building; the building's own name means the whole building.
+	bookable := map[string][]string{
+		"Sanctuary":       {"Worship Hall"},
+		"Fellowship Hall": {"Fellowship Hall", "Kitchen", "Classroom 1", "Classroom 2"},
+	}
+
 	for _, bd := range data {
-		b := &store.Place{ParentID: site, Kind: store.KindBuilding, Name: bd.name, Address: bd.address}
+		b := &store.Place{ParentID: site, Kind: store.KindBuilding, Name: bd.name, Address: bd.address,
+			Bookable: slices.Contains(bookable[bd.name], bd.name)}
 		if err := st.SavePlace(b); err != nil {
 			return err
 		}
 		rooms := map[string]int64{"": b.ID}
 		for _, rn := range bd.rooms {
-			r := &store.Place{ParentID: rooms[rn.in], Kind: rn.kind, Number: rn.number, Name: rn.name, Tags: rn.tags}
+			r := &store.Place{ParentID: rooms[rn.in], Kind: rn.kind, Number: rn.number, Name: rn.name, Tags: rn.tags,
+				Bookable: slices.Contains(bookable[bd.name], rn.name)}
 			for _, other := range rn.alsoIn {
 				r.AlsoIn = append(r.AlsoIn, rooms[other])
 			}

@@ -55,6 +55,8 @@ func (s *Server) routes() http.Handler {
 	auth("POST /places", s.handlePlaceCreate)
 	auth("GET /places/bulk", s.handlePlaceBulkNew)
 	auth("POST /places/bulk", s.handlePlaceBulkCreate)
+	auth("GET /places/bookable", s.handlePlacesBookable)
+	auth("POST /places/bookable", s.handlePlacesBookableSave)
 	auth("GET /places/{id}", s.handlePlaceShow)
 	auth("GET /places/{id}/edit", s.handlePlaceEdit)
 	auth("POST /places/{id}", s.handlePlaceUpdate)

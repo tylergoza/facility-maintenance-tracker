@@ -33,3 +33,8 @@ expecting `{"events": [...]}` with `busy`, `title`, `status`, `starts_on`, `star
 `ends_on`, `end_time`, `rooms` (names) and `url`. Answers are filtered again by room name, so
 it's safe if the calendar matches `room=` differently. Cached a minute per place, 3-second
 timeout; a calendar that's down shows a one-line note.
+
+## Bookable rooms
+
+- [x] Places can be marked **Can be booked**; the calendar's room request form lists them
+  from `GET /api/v1/places?bookable=1`. See `BOOKING_PLAN.md`.
