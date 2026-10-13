@@ -13,7 +13,7 @@ moving the items to the booked room (the existing **Move**); taking down
 is moving them back. The calendar shows those places, so there are no
 set-up or tear-down times to keep.
 
-Status: planned (2026-10-13).
+Status: steps 1 and 2 built (2026-10-13); step 3 waits on the calendar's step 6.
 
 ## What changes
 
@@ -34,20 +34,20 @@ Status: planned (2026-10-13).
 ## Steps
 
 ### 1. The setting, offers and the API
-- [ ] Migration `018_product_booking.sql`: `ALTER TABLE products ADD COLUMN booking TEXT NOT NULL DEFAULT '' CHECK (booking IN ('','count','service'))`; `CREATE TABLE product_offers (product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE, PRIMARY KEY (product_id, place_id))`
-- [ ] `store.Product.Booking` and `Offers []int`; read in the product loads, written when the product is saved. Clearing `booking` keeps the offers (so it can be turned back on), but the API doesn't send them
-- [ ] Product form (`web/templates/pages/products/form.html`, between the tracking choice and notes): an **On the church calendar** radio (Not offered / Ask how many / Ask yes or no) and an **Offered with** list of bookable places, grouped by building, with a bookable building pickable on its own ("the whole building"; it doesn't tick the rooms inside). With the setting on and nothing ticked, the page says "Not offered anywhere yet". Saved through `POST /products/{id}`. The item form's product fields only apply when a new product is made, so this lives on the product form only, with a link to it from the item page ("Offer on the calendar")
-- [ ] **Ask how many** needs portable items: saving it when some items aren't portable shows a warning listing them, with a link to fix (they can't be moved for a set-up)
-- [ ] Service products with no items: check a product can be made and kept with no items (a **New product** on `/products` if there isn't one), and that its page doesn't look broken with nothing under it ("A service: no items")
-- [ ] `counted` and units don't matter here: `total` is the sum of the items' quantities either way
-- [ ] Products list: a "Calendar" tag on offered products and a `?booking=1` filter, next to the category filter
-- [ ] API: `booking` and `offered_in` (place IDs) in the product JSON (`internal/server/api.go`); `GET /api/v1/products?booking=1` lists only products with the setting on **and** at least one offer (combines with the other filters). `total` is already there. Where the items are comes from the existing `GET /api/v1/items?product=` (`place{id,path}`, `quantity`); no new endpoint
-- [ ] A place that stops being bookable, or is deleted, drops out of `offered_in` (deleted: cascade; unbookable: filtered in the API, kept in the table so it comes back). The place's delete confirm and the "not bookable" save list the products offered there
-- [ ] Tests: migration, save/load, the CHECK, offers only bookable places (a bookable building is allowed, and doesn't add its rooms), no offers = not in `?booking=1`, the portable warning, API fields, a service product with no items, `total` for counted and unit products
+- [x] Migration `018_product_booking.sql`: `ALTER TABLE products ADD COLUMN booking TEXT NOT NULL DEFAULT '' CHECK (booking IN ('','count','service'))`; `CREATE TABLE product_offers (product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE, PRIMARY KEY (product_id, place_id))`
+- [x] `store.Product.Booking` and `Offers []int`; read in the product loads, written when the product is saved. Clearing `booking` keeps the offers (so it can be turned back on), but the API doesn't send them
+- [x] Product form (`web/templates/pages/products/form.html`, between the tracking choice and notes): an **On the church calendar** radio (Not offered / Ask how many / Ask yes or no) and an **Offered with** list of bookable places, grouped by building, with a bookable building pickable on its own ("the whole building"; it doesn't tick the rooms inside). With the setting on and nothing ticked, the page says "Not offered anywhere yet". Saved through `POST /products/{id}`. The item form's product fields only apply when a new product is made, so this lives on the product form only, with a link to it from the item page ("Offer on the calendar")
+- [x] **Ask how many** needs portable items: saving it when some items aren't portable shows a warning listing them, with a link to fix (they can't be moved for a set-up)
+- [x] Service products with no items: check a product can be made and kept with no items (a **New product** on `/products` if there isn't one), and that its page doesn't look broken with nothing under it ("A service: no items")
+- [x] `counted` and units don't matter here: `total` is the sum of the items' quantities either way
+- [x] Products list: a "Calendar" tag on offered products and a `?booking=1` filter, next to the category filter
+- [x] API: `booking` and `offered_in` (place IDs) in the product JSON (`internal/server/api.go`); `GET /api/v1/products?booking=1` lists only products with the setting on **and** at least one offer (combines with the other filters). `total` is already there. Where the items are comes from the existing `GET /api/v1/items?product=` (`place{id,path}`, `quantity`); no new endpoint
+- [x] A place that stops being bookable, or is deleted, drops out of `offered_in` (deleted: cascade; unbookable: filtered in the API, kept in the table so it comes back). The place's delete confirm and the "not bookable" save list the products offered there
+- [x] Tests: migration, save/load, the CHECK, offers only bookable places (a bookable building is allowed, and doesn't add its rooms), no offers = not in `?booking=1`, the portable warning, API fields, a service product with no items, `total` for counted and unit products
 
 ### 2. Seed and docs
-- [ ] `seed.go`: Folding tables and Chairs (`count`, offered with the sample bookable building and two bookable rooms), Inflatables (`count`, Life Center), Sound and Lighting (`service`, no items, offered with the sample building)
-- [ ] README: the products API fields, "set-ups are moves", and a line in the "running alone / connected" table: "Calendar: products set **On the church calendar** can be asked for with a room booking in the places they're offered with"
+- [x] `seed.go`: Folding tables and Chairs (`count`, offered with the sample bookable building and two bookable rooms), Inflatables (`count`, Life Center), Sound and Lighting (`service`, no items, offered with the sample building)
+- [x] README: the products API fields, "set-ups are moves", and a line in the "running alone / connected" table: "Calendar: products set **On the church calendar** can be asked for with a room booking in the places they're offered with"
 
 ### 3. Set-ups coming up (later, needs the calendar's step 6)
 Off unless the **Calendar** connection is set, like **Coming up here**.

@@ -298,8 +298,14 @@ func (s *Server) handlePlaceShow(w http.ResponseWriter, r *http.Request) {
 	if p.ParentID != 0 {
 		parent, _ = tree.Get(p.ParentID)
 	}
+	offered, err := s.store.ProductsOfferedAt(p.ID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
 	s.render(w, r, http.StatusOK, "places/show", map[string]any{
-		"Title": p.Label(), "Place": p, "Parent": parent, "Crumbs": tree.Ancestors(p.ID), "Children": tree.Children(p.ID), "AlsoIn": tree.AlsoIn(p.ID),
+		"OfferedHere": productNames(offered),
+		"Title":       p.Label(), "Place": p, "Parent": parent, "Crumbs": tree.Ancestors(p.ID), "Children": tree.Children(p.ID), "AlsoIn": tree.AlsoIn(p.ID),
 		"Items": items, "ItemGroups": groupItems(items), "AllItems": all, "Supplies": supplies, "Problems": problems,
 		"Tasks": s.groupTasks(tasks), "SupplyLocations": len(tree.Inside(p.ID)) > 0, "Upcoming": upcoming,
 	})
@@ -333,7 +339,43 @@ func (s *Server) handlePlaceUpdate(w http.ResponseWriter, r *http.Request) {
 	if f.ParentID != p.ParentID {
 		msg = "Moved, along with everything in it."
 	}
+	if p.Bookable && !f.Bookable {
+		msg += s.noLongerOffered(p.ID)
+	}
 	s.redirect(w, r, fmt.Sprintf("/places/%d", p.ID), msg)
+}
+
+// productNames lists product names, comma separated.
+func productNames(products []store.Product) string {
+	names := make([]string, len(products))
+	for i, p := range products {
+		names[i] = p.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// noLongerOffered words the products that were offered with places that
+// have just stopped being bookable, or "" when there are none.
+func (s *Server) noLongerOffered(placeIDs ...int64) string {
+	seen := map[int64]bool{}
+	var found []store.Product
+	for _, id := range placeIDs {
+		products, err := s.store.ProductsOfferedAt(id)
+		if err != nil {
+			continue
+		}
+		for _, p := range products {
+			if !seen[p.ID] {
+				seen[p.ID] = true
+				found = append(found, p)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	slices.SortFunc(found, func(a, b store.Product) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
+	return " No longer offered here: " + productNames(found) + "."
 }
 
 func (s *Server) handlePlaceDelete(w http.ResponseWriter, r *http.Request) {
@@ -491,6 +533,7 @@ func (s *Server) handlePlacesBookableSave(w http.ResponseWriter, r *http.Request
 	msg := pluralize(len(ids), "place") + " marked bookable."
 	if !on {
 		msg = pluralize(len(ids), "place") + " marked not bookable."
+		msg += s.noLongerOffered(ids...)
 	}
 	s.redirect(w, r, back, msg)
 }

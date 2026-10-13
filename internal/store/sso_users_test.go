@@ -32,8 +32,14 @@ func TestSSOMigrationKeepsReferences(t *testing.T) {
 	must(t, err)
 	bID, _ := res.LastInsertId()
 	b := &Place{ID: bID}
-	item := &Item{PlaceID: b.ID, Name: "Furnace"}
-	must(t, old.SaveItem(item, nil, 0))
+	// Raw SQL again: SaveItem touches products.booking, newer than v15.
+	res, err = old.DB.Exec(`INSERT INTO products (name) VALUES ('Furnace')`)
+	must(t, err)
+	productID, _ := res.LastInsertId()
+	res, err = old.DB.Exec(`INSERT INTO items (place_id, product_id) VALUES (?, ?)`, b.ID, productID)
+	must(t, err)
+	itemID, _ := res.LastInsertId()
+	item := &Item{ID: itemID}
 	must(t, old.RecordMaintenance(Completion{ItemID: item.ID, PerformedOn: "2026-09-15"}))
 	sp := &Supply{PlaceID: b.ID, Name: "Filters", Quantity: 5}
 	must(t, old.SaveSupply(sp, bobID))

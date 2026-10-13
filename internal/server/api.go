@@ -115,6 +115,10 @@ type apiProductJSON struct {
 	Total      int    `json:"total"`
 	ItemCount  int    `json:"item_count"`
 	PlaceCount int    `json:"place_count"`
+	// How the church calendar asks for it ("count", "service", or "" for
+	// not offered) and the bookable places it is offered with.
+	Booking   string  `json:"booking"`
+	OfferedIn []int64 `json:"offered_in"`
 }
 
 type apiUnitJSON struct {
@@ -178,8 +182,12 @@ type apiPlaceJSON struct {
 }
 
 func productJSON(p store.Product) apiProductJSON {
+	offered := []int64{}
+	if p.Booking != "" {
+		offered = append(offered, p.Offers...)
+	}
 	return apiProductJSON{ID: p.ID, Name: p.Name, Category: p.Category, Counted: p.Counted, Notes: p.Notes,
-		Total: p.Total, ItemCount: p.ItemCount, PlaceCount: p.PlaceCount}
+		Total: p.Total, ItemCount: p.ItemCount, PlaceCount: p.PlaceCount, Booking: p.Booking, OfferedIn: offered}
 }
 
 func itemJSON(i store.Item) apiItemJSON {
@@ -230,7 +238,8 @@ func placeJSON(p store.Place) apiPlaceJSON {
 
 // Endpoints ------------------------------------------------------------------
 
-// apiProducts: GET /api/v1/products?q=&category=&place=&tag=&portable=1&counted=1
+// apiProducts: GET /api/v1/products?q=&category=&place=&tag=&portable=1&counted=1&booking=1
+// booking=1 lists only products offered on the church calendar with at least one place.
 // Totals count only items in the place or tag asked about.
 func (s *Server) apiProducts(w http.ResponseWriter, r *http.Request) {
 	f, ok := s.apiFilters(w, r)
@@ -239,7 +248,7 @@ func (s *Server) apiProducts(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	products, err := s.store.ListProducts(store.ProductFilter{Query: f.Query, Category: q.Get("category"), PlaceID: f.PlaceID, Tag: f.Tag,
-		PortableOnly: apiBool(q.Get("portable")), CountedOnly: apiBool(q.Get("counted"))})
+		PortableOnly: apiBool(q.Get("portable")), CountedOnly: apiBool(q.Get("counted")), BookingOnly: apiBool(q.Get("booking"))})
 	if err != nil {
 		s.apiServerError(w, r, err)
 		return
