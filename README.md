@@ -43,6 +43,27 @@ To run in production, see [Deploying](#deploying).
 | Live updates | The dashboard, Problems and Supplies pages, and each problem and supply, update by themselves while open when anyone saves a change (over [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) at `/events`). If you're partway through a form there, a notice offers the changes instead of wiping what you typed. An installed app on a phone catches up when it comes back to the screen; phones pause apps in the background, so this doesn't notify anyone. |
 | Users | Admins manage users, settings (site name, site address, "due soon" window, public problem reports) and can download a backup. Editors manage data. |
 
+## Works alone, or with the other church apps
+
+This app is one of a few small church apps, and it runs fine on its own:
+install it, make an admin, and everything above works. Connecting another
+app is optional and only adds features. Until a connection is set up, the
+app behaves as if the other one doesn't exist. Each app keeps its own data;
+the others hold only a reference or a small copy, so no one app has to be
+running for the rest to work.
+
+| Connected app | What it adds | What this app keeps |
+|---------------|--------------|---------------------|
+| Nothing (alone) | Everything in the table above, with local passwords | All of its data: places, items, tasks, users |
+| User Management (SSO) | Sign in with a church account; admins manage this app's people from **Users** | A local user row for each person (linked by their User Management ID), so logs and problems stay theirs; local login stays as a break-glass |
+| Church calendar | **Coming up here** on a room's page, and a warning on maintenance due on a booked day | Nothing from the calendar is stored; it's asked when a page opens (cached a minute) |
+
+Going the other way, the church calendar can import rooms from this app, and
+the event and production planners read products, items and supplies from it.
+This app owns places (sites, buildings, rooms, areas) and items, products and
+supplies, and they reach them through the read-only [API](#api). Setup is
+under [Connections](#connections) and [Single sign-on](#single-sign-on).
+
 ## Stimulus autoloader
 
 `web/static/js/stimulus_autoloader.js` replaces the deprecated
