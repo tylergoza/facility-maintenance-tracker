@@ -41,31 +41,26 @@ const (
 // ssoSignIn reports whether /login goes to User Management: SSO is set up
 // and the break-glass local login isn't turned on.
 func (s *Server) ssoSignIn() bool {
-	return s.sso.Enabled() && s.store.Setting(localLoginSetting, "") != "on"
+	return s.SSO().Enabled() && s.store.Setting(localLoginSetting, "") != "on"
 }
 
 // baseURL is this app's public address, for the redirect URI registered in
-// User Management: BASE_URL when set, else the site address from Settings,
-// otherwise worked out from the request.
+// User Management: the SSO connection's address when set, else the site
+// address from Settings, otherwise worked out from the request.
 func (s *Server) baseURL(r *http.Request) string {
-	if s.cfg.BaseURL != "" {
-		return s.cfg.BaseURL
+	if b := s.configuredBaseURL(); b != "" {
+		return b
 	}
+	return s.fallbackBaseURL(r)
+}
+
+// fallbackBaseURL is baseURL without the SSO connection's address: the
+// site address from Settings, else the request's.
+func (s *Server) fallbackBaseURL(r *http.Request) string {
 	if u := s.SiteURL(); u != "" {
 		return u
 	}
-	scheme := "http"
-	if s.isHTTPS(r) {
-		scheme = "https"
-	}
-	host := r.Host
-	if s.cfg.TrustProxy {
-		if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-			host, _, _ = strings.Cut(h, ",")
-			host = strings.TrimSpace(host)
-		}
-	}
-	return scheme + "://" + host
+	return s.requestBaseURL(r)
 }
 
 func (s *Server) redirectURI(r *http.Request) string { return s.baseURL(r) + "/auth/callback" }
@@ -75,7 +70,8 @@ func (s *Server) redirectURI(r *http.Request) string { return s.baseURL(r) + "/a
 // It's SameSite=Lax so it comes back with the top-level redirect to
 // /auth/callback.
 func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
-	if !s.sso.Enabled() {
+	c := s.SSO()
+	if !c.Enabled() {
 		s.notFound(w, r)
 		return
 	}
@@ -94,7 +90,7 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	auth, err := s.sso.Authorize(s.redirectURI(r))
+	auth, err := c.Authorize(s.redirectURI(r))
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -127,7 +123,14 @@ func readSSOCookie(r *http.Request) (state, verifier, next string, ok bool) {
 
 // handleSSOCallback is where User Management sends people back with a code.
 func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
-	if !s.sso.Enabled() {
+	// A test sign-in from the Connections page uses the pending settings,
+	// so it works whether or not SSO is live.
+	if isSSOTestCallback(r) {
+		s.handleSSOTestCallback(w, r)
+		return
+	}
+	c := s.SSO()
+	if !c.Enabled() {
 		s.notFound(w, r)
 		return
 	}
@@ -163,7 +166,7 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	grant, u, err := s.sso.Exchange(ctx, code, s.redirectURI(r), verifier)
+	grant, u, err := c.Exchange(ctx, code, s.redirectURI(r), verifier)
 	if err != nil {
 		s.log.Warn("sso callback: code exchange failed", "err", err)
 		var ae *sso.APIError
@@ -254,7 +257,7 @@ func (g *grantChecks) do(token string, fn func() grantResult) grantResult {
 // and returns the user to carry on as, or nil to treat the request as
 // signed out (the session is deleted then).
 func (s *Server) checkGrant(sess *store.Session) *store.User {
-	if sess.Grant == "" || !s.sso.Enabled() || time.Since(sess.GrantCheckedAt) < grantCheckEvery {
+	if sess.Grant == "" || !s.SSO().Enabled() || time.Since(sess.GrantCheckedAt) < grantCheckEvery {
 		return &sess.User
 	}
 	return s.grants.do(sess.Token, func() grantResult {
@@ -262,7 +265,7 @@ func (s *Server) checkGrant(sess *store.Session) *store.User {
 		// into a failed check that the other waiters share.
 		ctx, cancel := context.WithTimeout(context.Background(), grantCheckTimeout)
 		defer cancel()
-		u, err := s.sso.CheckGrant(ctx, sess.Grant)
+		u, err := s.SSO().CheckGrant(ctx, sess.Grant)
 		switch {
 		case err == nil && u.Sub != sess.User.SSOSubject:
 			s.log.Error("grant check: grant is for someone else; signing out", "user", sess.User.Username)

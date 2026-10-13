@@ -156,7 +156,7 @@ func (f *fakeUM) set(fn func(f *fakeUM)) {
 }
 
 func ssoConfig(f *fakeUM) Config {
-	return Config{SSOURL: f.srv.URL, SSOClientID: "tracker", SSOClientSecret: "s3cret"}
+	return Config{Env: map[string]string{"SSO_URL": f.srv.URL, "SSO_CLIENT_ID": "tracker", "SSO_CLIENT_SECRET": "s3cret"}}
 }
 
 // noFollow is a client sharing c's cookies that stops at redirects.
@@ -237,13 +237,13 @@ func TestSSOConfigValidated(t *testing.T) {
 	}
 	defer st.Close()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := New(Config{SSOURL: "https://accounts.example.org", SSOClientID: "tracker"}, st, logger); err == nil {
+	if _, err := New(Config{Env: map[string]string{"SSO_URL": "https://accounts.example.org", "SSO_CLIENT_ID": "tracker"}}, st, logger); err == nil {
 		t.Fatal("SSO_URL without a client secret should be refused")
 	}
-	if _, err := New(Config{SSOURL: "accounts.example.org", SSOClientID: "a", SSOClientSecret: "b"}, st, logger); err == nil {
+	if _, err := New(Config{Env: map[string]string{"SSO_URL": "accounts.example.org", "SSO_CLIENT_ID": "a", "SSO_CLIENT_SECRET": "b"}}, st, logger); err == nil {
 		t.Fatal("SSO_URL without a scheme should be refused")
 	}
-	if _, err := New(Config{BaseURL: "maint.example.org"}, st, logger); err == nil {
+	if _, err := New(Config{Env: map[string]string{"BASE_URL": "maint.example.org"}}, st, logger); err == nil {
 		t.Fatal("BASE_URL without a scheme should be refused")
 	}
 }
@@ -305,7 +305,7 @@ func TestSSORedirectURIUsesSiteAddress(t *testing.T) {
 		t.Fatalf("redirect URI %q", got)
 	}
 	cfg := ssoConfig(f)
-	cfg.BaseURL = "https://maint.example.com/"
+	cfg.Env["BASE_URL"] = "https://maint.example.com/"
 	if srv, err = New(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatal(err)
 	}

@@ -271,12 +271,18 @@ func (s *Server) handlePlaceShow(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
+	// Tasks here and inside: listed when there are places inside, and
+	// checked against the room's bookings when the calendar is connected.
 	var tasks []store.Task
-	if p.ChildCount > 0 {
+	if p.ChildCount > 0 || s.Calendar().Configured() {
 		if tasks, err = s.store.ListTasks(store.TaskFilter{PlaceID: p.ID, ActiveOnly: true}); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
+	}
+	upcoming := s.upcomingFor(r.Context(), p, tasks)
+	if p.ChildCount == 0 {
+		tasks = nil
 	}
 	var parent store.Place
 	if p.ParentID != 0 {
@@ -285,7 +291,7 @@ func (s *Server) handlePlaceShow(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "places/show", map[string]any{
 		"Title": p.Label(), "Place": p, "Parent": parent, "Crumbs": tree.Ancestors(p.ID), "Children": tree.Children(p.ID), "AlsoIn": tree.AlsoIn(p.ID),
 		"Items": items, "ItemGroups": groupItems(items), "AllItems": all, "Supplies": supplies, "Problems": problems,
-		"Tasks": s.groupTasks(tasks), "SupplyLocations": len(tree.Inside(p.ID)) > 0,
+		"Tasks": s.groupTasks(tasks), "SupplyLocations": len(tree.Inside(p.ID)) > 0, "Upcoming": upcoming,
 	})
 }
 

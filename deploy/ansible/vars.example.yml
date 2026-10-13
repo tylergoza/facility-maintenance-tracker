@@ -31,8 +31,16 @@ droplet_name: maintenance-tracker
 
 # tz: America/Chicago
 
+# Connections are optional. Leave each blank to manage it in the app on
+# /admin/connections; a value here is fixed in the app.
+
 # Single sign-on through User Management. Set this, then deploy with
 #   export UM_TRACKER_SECRET=...   # printed by User Management's import-users playbook
 # Unset it and redeploy to turn SSO off; `local-login on` is the break-glass.
 # sso_url: https://accounts.example.org
 # base_url: https://maintenance.example.org   # default: Settings → Site address
+
+# The church calendar, read for "Coming up here" on a room's page. Deploy with
+#   export MT_CALENDAR_TOKEN=cal_...   # a read token made in the calendar
+# calendar_url: https://calendar.example.org
+# calendar_internal_url: http://127.0.0.1:8120
