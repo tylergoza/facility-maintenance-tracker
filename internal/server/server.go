@@ -43,6 +43,9 @@ type Config struct {
 	// (ConnectionEnv); a connection with any of them set ignores its
 	// settings.
 	Env map[string]string
+	// OldSiteURLs are earlier site addresses. QR codes already printed with
+	// them still work in the in-app scanner.
+	OldSiteURLs []string
 }
 
 type Server struct {

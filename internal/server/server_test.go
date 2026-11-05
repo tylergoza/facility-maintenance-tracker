@@ -1457,3 +1457,19 @@ func TestLiveEvents(t *testing.T) {
 	}
 	c.get("/static/js/controllers/live_controller.js", 200)
 }
+
+// Codes printed before the site moved must keep scanning, and a blank entry
+// from an unset variable must not add an origin.
+func TestScanAcceptsOldSiteAddresses(t *testing.T) {
+	c, st := newTestServerWith(t, Config{OldSiteURLs: []string{"https://old.example.org", ""}})
+	st.CreateUser("admin", "", "a long password", true)
+	c.get("/login", 200)
+	c.post("/login", "/login", url.Values{"username": {"admin"}, "password": {"a long password"}}, 200)
+	body := c.get("/scan", 200)
+	if !strings.Contains(body, "https://old.example.org") {
+		t.Error("the scanner should accept the old address")
+	}
+	if !strings.Contains(body, `data-scan-origins-value="[&#34;https://old.example.org&#34;]"`) {
+		t.Errorf("the scanner should list only the old address, got\n%s", body)
+	}
+}

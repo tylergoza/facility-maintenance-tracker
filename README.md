@@ -97,9 +97,10 @@ Set with a flag or an environment variable. Flags go **before** any command
 | `DB_PATH` | `-db` | `data/maintenance.db` | SQLite file, relative to the working directory. Created, with migrations applied, on start; its folder must be writable. |
 | `TZ` | | system | Facility time zone (e.g. `America/Chicago`): decides what "today" and "overdue" mean |
 | `TRUST_PROXY=1` | `-trust-proxy` | off | Trust `X-Forwarded-For/Proto` from a reverse proxy, for secure cookies, HSTS and real client IPs. Only turn on when a proxy is the only way in; otherwise clients can fake their IP. |
+| `OLD_SITE_URLS` | | none | Earlier site addresses, comma-separated. QR codes already printed with them still work in the in-app scanner. |
 | `DEV=1` | `-dev` | off | Load templates/static from `./web` on disk (development only) |
 | `SSO_URL` | | | User Management's public address (e.g. `https://accounts.example.org`). Set it to sign in there instead of with local passwords; empty keeps the local login. |
-| `SSO_INTERNAL_URL` | | `SSO_URL` | User Management for server-to-server calls, e.g. `http://127.0.0.1:8100` on the shared droplet |
+| `SSO_INTERNAL_URL` | | `SSO_URL` | User Management for server-to-server calls, e.g. an address only the servers can reach. Empty uses `SSO_URL` |
 | `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | | | From registering this app in User Management (shown once). Required when `SSO_URL` is set; the app won't start without them. |
 | `BASE_URL` | | site address, else from the request | This app's public address, e.g. `https://maint.example.org`. The sign-in redirect URI is `BASE_URL/auth/callback` and must be registered exactly like that in User Management. |
 | `CALENDAR_URL`, `CALENDAR_INTERNAL_URL`, `CALENDAR_TOKEN` | | | The church calendar, read for **Coming up here** on a room's page (a read token, `cal_…`). Off when unset. |
@@ -362,42 +363,57 @@ as root leaves files the service can't write to.
 ### DigitalOcean with Ansible
 
 `deploy/ansible/` automates the binary + systemd setup on a DigitalOcean
-droplet. Nothing private is committed: the API token comes from the
-environment, the droplet is found by its tag on every run, and your domain
-and settings go in the gitignored `deploy/ansible/vars.yml`.
+apps box, behind a separate edge box that runs Caddy for every app
+([edge_proxy](../edge_proxy)). Nothing private is committed: the API token
+comes from the environment, droplets are found by tag on every run, and your
+domain and settings go in the gitignored `deploy/ansible/vars.yml`.
 
 You need Ansible on your machine (`brew install ansible` or
 `pipx install ansible-core`), Go, a DigitalOcean API token with read/write
-scope, and your domain added under **Networking → Domains** in DigitalOcean
-with the registrar's nameservers pointed at it.
+scope, your domain added under **Networking → Domains** in DigitalOcean with
+the registrar's nameservers pointed at it, and the edge box provisioned first
+(edge_proxy's `make provision`, which also makes the firewalls).
 
 ```sh
 cp deploy/ansible/vars.example.yml deploy/ansible/vars.yml   # set app_domain and dns_zone
-export DIGITALOCEAN_TOKEN=...          # e.g. $(security find-generic-password -s digitalocean -w)
-make provision                         # first time
-make deploy                            # every update after that
+with-do-church make provision          # first time
+with-do-church make deploy             # every update after that
 ```
 
-`make provision` uploads your SSH public key to the account, creates the
-droplet (Ubuntu 26.04, $6 size in New York 3 by default, weekly droplet backups on) in your chosen project, a cloud
-firewall allowing only SSH, HTTP and HTTPS, and the DNS A record. It then
-installs updates, Caddy and the service user, and runs the deploy. Running it
-again leaves existing resources alone.
+`with-do-church` runs a command with `DIGITALOCEAN_TOKEN` set for the church
+account. Without it, export the token yourself. Set `do_team` in `vars.yml` to
+the account's team name and every play stops if the token belongs to another
+account.
+
+`make provision` uploads your SSH public key to the account if it isn't there,
+creates the apps box named `apps_box` (default `apps-1`; Ubuntu 26.04, $6 size
+in New York 3, weekly droplet backups on) in your chosen project, tags it
+`apps` and `apps-1` plus `do_extra_tags`, adds a 1 GB swap file and monitoring
+alerts at 80% memory and disk, and points the app's DNS A record at the edge
+box. It then installs updates and the service user, and runs the deploy.
+Running it again leaves existing resources alone.
+
+- **Shared box.** If another app already made `apps-1`, provision finds it by
+  tag and adds this app's user, data folder and unit alongside. Each app has its
+  own port, so any mix fits on one box.
+- **DNS.** A record already pointing at an edge box is left alone. If it's
+  missing or wrong, provision points it at the edge box when there's exactly
+  one, and stops with a message when there are none or two. It never points DNS
+  at the apps box. `manage_dns: false` skips the step.
+- **No firewalls here.** edge_proxy makes them (`website`, `ssh`, and
+  `apps-internal`, which lets only the edge box reach the apps' ports). The
+  box needs the `ssh` tag, hence `do_extra_tags: [ssh]` in `vars.yml`.
 
 `make deploy` runs the tests, builds `bin/maintenance-tracker-linux-amd64`
-here, and installs it with `deploy/maintenance-tracker.service` and a Caddy
-site for your domain. When the binary changes, it backs up the database to
-`/var/lib/maintenance-tracker/backups/` first and keeps the last 10 backups.
-The deploy fails if the app doesn't answer `/healthz` afterwards.
-
-The droplet can also host the
-[production planner](../production_planning): its deploy finds this droplet by
-its tag and adds itself alongside, with its own Caddy site in
-`/etc/caddy/sites/production-planner.caddy`. Caddy's config is split so both
-apps can deploy without overwriting each other: `/etc/caddy/Caddyfile` only
-imports `/etc/caddy/sites/*.caddy`, and each app writes its own site file
-there (this one's is `/etc/caddy/sites/maintenance-tracker.caddy`). Both repos
-write the same main Caddyfile, so it doesn't matter which deploys last.
+here, and installs it with `deploy/maintenance-tracker.service`. The unit
+listens on the box's VPC address (a drop-in sets `ADDR`), not on a public
+port. A second play writes the app's Caddy site,
+`/etc/caddy/sites/maintenance-tracker.caddy`, on every edge box: it proxies
+the domain to the VPC address, then validates the whole config and reloads
+Caddy. The deploy stops before building if there's no edge box. When the binary
+changes, it backs up the database to `/var/lib/maintenance-tracker/backups/`
+first and keeps the last 10 backups. The deploy fails if the app doesn't answer
+`/healthz` on the VPC address afterwards.
 
 On the first deploy, the admin user is created before the app starts, so
 `/setup` is never exposed. Set `MT_ADMIN_PASSWORD` to choose its password, or
@@ -421,14 +437,14 @@ To set the calendar from Ansible:
 ```sh
 # in deploy/ansible/vars.yml
 calendar_url: https://calendar.example.org
-calendar_internal_url: http://127.0.0.1:8120   # same droplet
+# calendar_internal_url: leave empty; the public address goes through the edge box
 
 export MT_CALENDAR_TOKEN=cal_...       # a read token made in the calendar
 make deploy
 ```
 
 **Turning on single sign-on.** Either set it up in the app on
-**Connections**, or set `sso_url` (see [Single sign-on](#single-sign-on)). Deploy User Management to this droplet
+**Connections**, or set `sso_url` (see [Single sign-on](#single-sign-on)). Deploy User Management first
 and run its import-users playbook first; that prints the tracker's client
 secret. Then:
 
@@ -445,7 +461,7 @@ The deploy stops before building if `sso_url` is set and `UM_TRACKER_SECRET`
 is empty, so export it for every deploy while SSO is on. The SSO settings go
 in the unit's drop-in (`/etc/systemd/system/maintenance-tracker.service.d/override.conf`,
 root-only). To turn SSO off, remove `sso_url` and `make deploy` again. If User
-Management breaks while SSO is on, `local-login on` on the droplet is the
+Management breaks while SSO is on, `local-login on` on the box is the
 break-glass; no redeploy needed.
 
 Ansible can't answer a PIN prompt, so if your SSH key is on a hardware token
@@ -467,8 +483,7 @@ The droplet only gets the deploy key, so to keep logging in by hand with the
 hardware key, list its public key in `ssh_authorized_keys` in `vars.yml`
 (e.g. `[~/.ssh/id_ed25519_sk.pub]`). `make provision` adds them for root.
 
-To have your own cloud firewalls cover the droplet, list their tags in
-`do_extra_tags` and set `do_firewall: false`. Pass `-e skip_tests=true` to `ansible-playbook` to skip the tests.
+Pass `-e skip_tests=true` to `ansible-playbook` to skip the tests.
 To roll back, check out the earlier commit and `make deploy` it. If its
 migrations changed the database, also restore the pre-deploy backup (see
 [Moving between hosts](#moving-between-hosts)). SSH in as `root@<domain>` for
@@ -485,16 +500,55 @@ On any machine with the binary (`make build` builds one for the current OS):
 
 ### Moving between hosts
 
-1. Get a snapshot: **Settings → Download backup**, or the `backup` command.
-   Copy `secrets.key` from beside the database too, or re-enter the saved
-   connection secrets on **Connections** afterwards.
-2. On the new host, stop the app, copy the file to its database path (and
-   `secrets.key` next to it, mode 0600, owned by the app's user), start the app.
-   - Docker: copy it to `./data/maintenance.db`, then `sudo chown 10001:10001 data/maintenance.db`.
-   - systemd: copy it to `/var/lib/maintenance-tracker/maintenance.db`, then `sudo chown maintenance: /var/lib/maintenance-tracker/maintenance.db`.
+Backup and restore are separate steps that go through this machine, so they
+work between DigitalOcean accounts and need no network path between the boxes.
+Backups land in `~/Backups/mountainview/maintenance-tracker/<UTC time>/`
+(`local_backup_dir`; folders 0700, files 0600, outside every repo), holding
+`maintenance.db`, `secrets.key` and a `manifest.yml` with the source, time,
+binary checksum and each file's sha256. The database and `secrets.key` are all
+the app stores; there are no uploads or other files to carry.
 
-Copying the live `.db` while the app runs can miss data held in the `-wal`
-file. Use the backup command or button, or stop the app first.
+```sh
+# Copy from a box. FROM is an IP (needs only SSH, no token) or a droplet name
+# (looked up in the token's account). The app keeps running.
+make backup FROM=203.0.113.10
+# The final copy: stops the app first and leaves it stopped and disabled.
+make backup FROM=203.0.113.10 STOP=true
+
+# Put a backup on the apps box. Provision first, without starting the app.
+with-do-church make provision RESTORE_PENDING=true
+with-do-church make restore BACKUP=latest      # or BACKUP=<dir>
+```
+
+`RESTORE_PENDING=true` installs the binary and unit but doesn't start the
+app or create an admin, because restore refuses to replace a database and the
+app would make an empty one on first start. Restore checks the manifest's
+checksums, installs the files owned by the service user at mode 0600, removes
+stale `-wal`/`-shm` files, starts the app and waits for `/healthz`. If the box
+already has a database it refuses, unless `FORCE=true`, which first saves
+`pre-restore-<time>.db` (and `.key`) in the box's backups folder.
+
+To move to another apps box in the same account, set `apps_box` in `vars.yml`
+to the new box and run `with-do-church make move FROM=apps-1`. It backs up the
+old box and stops the app there, provisions the new one with
+`RESTORE_PENDING=true`, restores, and rewrites the edge site file for the new
+address. DNS isn't touched. `move` refuses when `FROM` is the current
+`apps_box`; pass `FORCE=true` to replace a database already on the new box. The old box keeps its
+data folder as a fallback, and moving back is the same command the other way.
+
+By hand, without Ansible: take the snapshot with **Settings → Download
+backup** or the `backup` command (copying the live `.db` can miss data held in
+the `-wal` file), copy `secrets.key` from beside the database too (or
+re-enter the saved connection secrets on **Connections** afterwards), stop the
+app on the new host, and put both at its database path, mode 0600, owned by the
+app's user.
+- Docker: copy to `./data/`, then `sudo chown 10001:10001 data/maintenance.db data/secrets.key`.
+- systemd: copy to `/var/lib/maintenance-tracker/`, then `sudo chown maintenance: /var/lib/maintenance-tracker/maintenance.db /var/lib/maintenance-tracker/secrets.key`.
+
+**Changing domain.** List the old and new host names as `address_rewrites` in
+`vars.yml`, and each `make restore` swaps them in the database before the app
+starts. It's all or nothing: a failure leaves the database as it was and stops the
+restore. Names not listed are left alone.
 
 ## API
 
@@ -541,7 +595,7 @@ internal/sso/               User Management client
 internal/calendar/          church calendar read client
 web/templates/              layout, partials, pages, sw.js (service worker)
 web/static/                 css, js (application, autoloader, controllers, vendor), icons
-deploy/                     systemd unit, Caddyfile, ansible/ (DigitalOcean provision + deploy)
+deploy/                     systemd unit, Caddyfile, ansible/ (DigitalOcean provision, deploy, backup, restore, move)
 ```
 
 ## Tests

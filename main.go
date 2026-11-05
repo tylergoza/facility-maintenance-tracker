@@ -81,7 +81,8 @@ func main() {
 	}
 	srv, err := server.New(server.Config{
 		Dev: *dev, TrustProxy: *trustProxy,
-		Env: connEnv,
+		Env:         connEnv,
+		OldSiteURLs: strings.Split(os.Getenv("OLD_SITE_URLS"), ","),
 	}, st, logger)
 	if err != nil {
 		logger.Error("init server", "err", err)
