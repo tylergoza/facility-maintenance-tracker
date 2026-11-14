@@ -9,7 +9,8 @@
 # Logs: journalctl -u maintenance-tracker -f
 [Unit]
 Description=Facility Maintenance Tracker
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 User=maintenance
@@ -18,7 +19,9 @@ Environment=ADDR=127.0.0.1:8080
 Environment=DB_PATH=/var/lib/maintenance-tracker/maintenance.db
 Environment=TZ=America/Chicago
 # Caddy (deploy/Caddyfile) is in front; it's the only thing that can reach
-# 127.0.0.1:8080, so its X-Forwarded-* headers can be trusted.
+# 127.0.0.1:8080, so its X-Forwarded-* headers can be trusted. The Ansible
+# deploy overrides ADDR with the box's VPC address, which the edge box's Caddy
+# reaches and a firewall limits to it.
 Environment=TRUST_PROXY=1
 ExecStart=/usr/local/bin/maintenance-tracker
 Restart=on-failure

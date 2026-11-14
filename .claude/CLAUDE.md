@@ -12,3 +12,4 @@
   being rebuilt.
 - `BOOKING_PLAN.md`: this app's part of bookable rooms / pending bookings / unscheduled events (design in `../.claude/plans/bookable-rooms-and-pending-bookings.md`). Tick its checkboxes as steps are done.
 - `EQUIPMENT_PLAN.md`: this app's part of equipment and services (Sound, Lighting) asked for with room bookings (design in `../.claude/plans/bookable-equipment.md`). Tick its checkboxes as steps are done.
+- Deploy (`deploy/ansible`): the app runs on an apps box (`apps_box`, default `apps-1`, shared with the other apps) in the church DigitalOcean account and binds its VPC address; the edge box (`../edge_proxy`) holds Caddy, DNS points at it, and this deploy writes the app's site file there. Run commands through `with-do-church`. Its state is `maintenance.db` plus `secrets.key` only; `make backup` / `restore` / `move` carry both. Real `do_team` and domains live in the gitignored `vars.yml`.

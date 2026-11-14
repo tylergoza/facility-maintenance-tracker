@@ -4,5 +4,5 @@
 	# /events streams live updates; compressing it would hold them back.
 	@compress not path /events
 	encode @compress gzip
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy {{ hostvars[groups['app'][0]].private_ip }}:{{ app_port }}
 }
