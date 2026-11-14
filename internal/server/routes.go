@@ -159,6 +159,8 @@ func (s *Server) routes() http.Handler {
 	admin("POST /admin/tokens", s.handleTokenCreate)
 	admin("POST /admin/tokens/{id}/delete", s.handleTokenDelete)
 
+	// The signed-in person, with a User Management token (the MCP server)
+	s.meRoutes(mux)
 	// Other apps, with an API token
 	s.apiRoutes(mux)
 

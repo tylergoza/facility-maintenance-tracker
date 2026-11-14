@@ -28,6 +28,7 @@ import (
 	"github.com/tylergoza/facility-maintenance-tracker/internal/calendar"
 	"github.com/tylergoza/facility-maintenance-tracker/internal/sso"
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
+	"github.com/tylergoza/facility-maintenance-tracker/internal/umtoken"
 	"github.com/tylergoza/facility-maintenance-tracker/web"
 )
 
@@ -83,6 +84,8 @@ type Server struct {
 	ssoBroken  atomic.Value
 	ssoBaseURL atomic.Value
 	grants     *grantChecks
+	// meTokens checks the User Management tokens sent to /api/v1/me/….
+	meTokens *umtoken.Verifier
 
 	calendar atomic.Pointer[calendar.Client]
 	// upcoming caches each room's bookings from the calendar for a minute.
@@ -94,7 +97,7 @@ func New(cfg Config, st *store.Store, logger *slog.Logger) (*Server, error) {
 		cfg.SessionTTL = 30 * 24 * time.Hour
 	}
 	s := &Server{cfg: cfg, store: st, log: logger, limiter: newLoginLimiter(10, 15*time.Minute), reportLimiter: newLoginLimiter(10, time.Hour), live: newHub(), grants: newGrantChecks(),
-		upcoming: newUpcomingCache()}
+		upcoming: newUpcomingCache(), meTokens: umtoken.New()}
 	s.ssoBroken.Store("")
 	s.ssoBaseURL.Store("")
 	if err := s.reloadSSO(); err != nil {
