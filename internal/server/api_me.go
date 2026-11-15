@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"net/http"
 	"sort"
 	"strconv"
@@ -31,6 +32,7 @@ func (s *Server) meRoutes(mux *http.ServeMux) {
 	s.meRoute(mux, "GET /api/v1/me/supplies", s.meSupplies)
 	s.meRoute(mux, "GET /api/v1/me/tasks", s.meTasks)
 	s.meRoute(mux, "GET /api/v1/me/history", s.meHistory)
+	s.meRoute(mux, "GET /api/v1/me/problems", s.meProblems)
 	s.meCatchAll(mux)
 }
 
@@ -377,4 +379,92 @@ func (s *Server) meHistory(w http.ResponseWriter, r *http.Request) {
 			PerformedBy: by, Notes: l.Notes})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"history": out})
+}
+
+type meProblemJSON struct {
+	ID         int64                 `json:"id"`
+	Title      string                `json:"title"`
+	Details    string                `json:"details"`
+	Status     string                `json:"status"` // open, in_progress or resolved
+	Item       string                `json:"item"`   // "" when not tied to an item
+	Unit       string                `json:"unit"`   // which of a group item's units, e.g. "#2 – left of the stage"; "" if not set
+	Place      apiPlaceRef           `json:"place"`
+	AssignedTo string                `json:"assigned_to"`
+	ReportedBy string                `json:"reported_by"`
+	CreatedAt  string                `json:"created_at"` // RFC 3339, UTC
+	UpdatedAt  string                `json:"updated_at"`
+	ResolvedAt string                `json:"resolved_at"` // "" until resolved
+	Updates    []meProblemUpdateJSON `json:"updates"`     // oldest first, at most the last 10
+}
+
+type meProblemUpdateJSON struct {
+	At         string `json:"at"` // RFC 3339, UTC
+	By         string `json:"by"`
+	Status     string `json:"status"`      // new status; "" if unchanged
+	AssignedTo string `json:"assigned_to"` // new assignee when it changed ("nobody" when unassigned); "" otherwise
+	Note       string `json:"note"`
+}
+
+// meUTC turns the store's UTC "YYYY-MM-DD HH:MM:SS" into RFC 3339.
+func meUTC(s string) string {
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	return s
+}
+
+// meProblems: GET /api/v1/me/problems?q=&status=active|open|in_progress|resolved|all&place=&limit=.
+// Problem reports as on the Problems page (every signed-in person sees
+// them): active ones first (open, then in progress), newest first. status
+// defaults to active. q matches the title, details, item name or place.
+// The reporter's phone or email is never sent: visitors' contact details
+// stay in the app.
+func (s *Server) meProblems(w http.ResponseWriter, r *http.Request) {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	switch status {
+	case "":
+		status = "active"
+	case "all":
+		status = ""
+	case "active", store.ProblemOpen, store.ProblemInProgress, store.ProblemResolved:
+	default:
+		apiError(w, http.StatusBadRequest, "status must be active, open, in_progress, resolved or all")
+		return
+	}
+	problems, err := s.store.ListProblems(store.ProblemFilter{Status: status})
+	if err != nil {
+		s.apiServerError(w, r, err)
+		return
+	}
+	q := strings.ToLower(meQuery(r))
+	place := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("place")))
+	out := []meProblemJSON{}
+	for _, p := range problems {
+		if len(out) >= meLimit(r) {
+			break
+		}
+		if q != "" && !strings.Contains(strings.ToLower(p.Title+"\n"+p.Details+"\n"+p.ItemName+"\n"+p.Place.Path), q) {
+			continue
+		}
+		if place != "" && !strings.Contains(strings.ToLower(p.Place.Path), place) {
+			continue
+		}
+		ups, err := s.store.ListProblemUpdates(p.ID)
+		if err != nil {
+			s.apiServerError(w, r, err)
+			return
+		}
+		updates := []meProblemUpdateJSON{}
+		for _, u := range ups[max(0, len(ups)-10):] {
+			assigned := ""
+			if u.Assigned {
+				assigned = cmp.Or(u.AssignedName, "nobody")
+			}
+			updates = append(updates, meProblemUpdateJSON{At: meUTC(u.CreatedAt), By: u.CreatedBy, Status: u.Status, AssignedTo: assigned, Note: u.Note})
+		}
+		out = append(out, meProblemJSON{ID: p.ID, Title: p.Title, Details: p.Details, Status: p.Status, Item: p.ItemName,
+			Unit: p.UnitName(), Place: apiPlaceRef{p.PlaceID, p.Place.Path}, AssignedTo: p.AssignedName, ReportedBy: p.ReporterName,
+			CreatedAt: meUTC(p.CreatedAt), UpdatedAt: meUTC(p.UpdatedAt), ResolvedAt: meUTC(p.ResolvedAt), Updates: updates})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"problems": out})
 }

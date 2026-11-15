@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -578,4 +579,66 @@ func TestMeUnits(t *testing.T) {
 	if len(items["items"]) != 1 || items["items"][0]["supply"] != "Furnace filters" || len(items["items"][0]["units"].([]any)) != 4 {
 		t.Errorf("items = %v", items)
 	}
+}
+
+// Problem reports: active by default, searchable, with their updates; the
+// reporter's contact details never leave the app.
+func TestMeProblems(t *testing.T) {
+	st, _, _ := meFixture(t)
+	tv := &store.Problem{PlaceID: 3, Title: "TV won't turn on", Details: "Fellowship hall TV is dead, tried the remote",
+		ReporterName: "Visitor Vic", ReporterContact: "555-0100"}
+	if err := st.CreateProblem(tv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateProblem(store.ProblemChange{ProblemID: tv.ID, Status: store.ProblemInProgress, Note: "Ordered a new power supply"}); err != nil {
+		t.Fatal(err)
+	}
+	old := &store.Problem{PlaceID: 4, Title: "Leaky faucet", ReporterName: "Ann"}
+	if err := st.CreateProblem(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateProblem(store.ProblemChange{ProblemID: old.ID, Status: store.ProblemResolved, Note: "Washer replaced"}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeTokenUM(t)
+	_, c := meServer(t, st, f)
+	f.give("umd_ed", "s-ed", "ed", "editor")
+	c.meGet("/api/v1/me/problems", "", 401)
+
+	get := func(q string, want int) []map[string]any {
+		body := c.meGet("/api/v1/me/problems"+q, "umd_ed", want)
+		if strings.Contains(body, "555-0100") {
+			t.Errorf("reporter contact leaked: %s", body)
+		}
+		var raw map[string][]map[string]any
+		json.Unmarshal([]byte(body), &raw)
+		return raw["problems"]
+	}
+	active := get("", 200)
+	if len(active) != 1 || active[0]["title"] != "TV won't turn on" || active[0]["status"] != "in_progress" {
+		t.Fatalf("active = %v", active)
+	}
+	p := active[0]
+	checkKeys(t, "problem", p, "id", "title", "details", "status", "item", "unit", "place", "assigned_to", "reported_by",
+		"created_at", "updated_at", "resolved_at", "updates")
+	if p["reported_by"] != "Visitor Vic" || !strings.HasSuffix(p["created_at"].(string), "Z") {
+		t.Errorf("problem = %v", p)
+	}
+	ups, _ := p["updates"].([]any)
+	if len(ups) == 0 || !strings.Contains(fmt.Sprint(ups), "Ordered a new power supply") {
+		t.Errorf("updates = %v", ups)
+	}
+	if got := get("?status=all", 200); len(got) != 2 {
+		t.Errorf("all = %v", got)
+	}
+	if got := get("?status=resolved&q=washer", 200); len(got) != 0 { // q looks at title/details/item/place, not notes
+		t.Errorf("q matched a note: %v", got)
+	}
+	if got := get("?q=tv&place=fellowship", 200); len(got) != 1 {
+		t.Errorf("q+place = %v", got)
+	}
+	if got := get("?q=tv&place=kitchen", 200); len(got) != 0 {
+		t.Errorf("wrong place matched: %v", got)
+	}
+	get("?status=broken", 400)
 }
