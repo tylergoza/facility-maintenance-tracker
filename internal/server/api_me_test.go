@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -321,15 +322,20 @@ func TestMeLists(t *testing.T) {
 		if len(raw["items"]) != 1 {
 			t.Fatalf("items: %s", body)
 		}
-		checkKeys(t, "item", raw["items"][0], "id", "name", "category", "quantity", "place", "manufacturer", "model")
+		checkKeys(t, "item", raw["items"][0], "id", "name", "category", "quantity", "place", "manufacturer", "model", "notes", "supply", "supply_per", "units")
 		it := raw["items"][0]
 		place, _ := it["place"].(map[string]any)
 		if it["model"] != "EB-992F" || place["path"] != "Main › Fellowship Hall" || place["id"] != 3.0 {
 			t.Errorf("item = %v", it)
 		}
 		checkKeys(t, "item place", place, "id", "path")
-		if strings.Contains(body, "SN-SECRET") || strings.Contains(body, "office") {
-			t.Errorf("item extras leaked: %s", body)
+		// Notes are on the web page for every signed-in person, so they're
+		// here too; serial numbers stay out.
+		if strings.Contains(body, "SN-SECRET") {
+			t.Errorf("serial number leaked: %s", body)
+		}
+		if it["notes"] != "key in the office" {
+			t.Errorf("item notes = %v", it["notes"])
 		}
 
 		body = c.meGet("/api/v1/me/supplies?low=1", tok, 200)
@@ -369,5 +375,207 @@ func checkKeys(t *testing.T, what string, obj map[string]any, keys ...string) {
 	slices.Sort(keys)
 	if !slices.Equal(got, keys) {
 		t.Errorf("%s keys = %v, want %v", what, got, keys)
+	}
+}
+
+// meMaintFixture adds a furnace-filter task (recurring, using the supply
+// "Furnace filters") done twice, and a one-off unscheduled task, to the
+// meFixture data.
+func meMaintFixture(t *testing.T, ed *client) {
+	t.Helper()
+	ed.post("/supplies/new", "/supplies", url.Values{"place_id": {"4"}, "name": {"Furnace filters"}, "quantity": {"5"}, "reorder_at": {"1"}}, 200) // supply 3
+	ed.post("/tasks/new?item=1", "/tasks", url.Values{"item_id": {"1"}, "name": {"Change air filter"}, "uses_supply": {"1"}, "supply_id": {"3"}, "supply_amount": {"1"},
+		"supply_always": {"1"}, "recurring": {"1"}, "interval_value": {"3"}, "interval_unit": {"months"}}, 200) // task 1
+	ed.post("/tasks/new?item=2", "/tasks", url.Values{"item_id": {"2"}, "name": {"Wipe down"}}, 200) // task 2, unscheduled
+	ed.post("/tasks/1/complete", "/tasks/1/complete", url.Values{"performed_on": {"2026-01-10"}, "took_supply": {"1"}, "supply_amount": {"1"}}, 200)
+	ed.post("/tasks/1/complete", "/tasks/1/complete", url.Values{"performed_on": {"2026-04-12"}, "took_supply": {"1"}, "supply_amount": {"1"}, "cost": {"12.50"}}, 200)
+}
+
+func TestMeTasks(t *testing.T) {
+	st, _, ed := meFixture(t)
+	meMaintFixture(t, ed)
+	f := newFakeTokenUM(t)
+	_, c := meServer(t, st, f)
+	f.give("umd_ed", "s-ed", "ed", "editor")
+	f.give("umd_ad", "s-ad", "admin", "admin")
+
+	get := func(tok, q string, want int) []map[string]any {
+		body := c.meGet("/api/v1/me/tasks"+q, tok, want)
+		var raw map[string][]map[string]any
+		json.Unmarshal([]byte(body), &raw)
+		return raw["tasks"]
+	}
+	// An editor and an admin see the same, as on the web pages.
+	for _, tok := range []string{"umd_ed", "umd_ad"} {
+		all := get(tok, "", 200)
+		if len(all) != 2 {
+			t.Fatalf("tasks = %v", all)
+		}
+		checkKeys(t, "task", all[0], "id", "item", "place", "name", "interval", "last_completed_on", "next_due_on", "status", "supply", "supply_amount", "supply_short", "description", "quantity", "item_notes", "units")
+		if a := all[0]; a["item"] != "Epson projector" || a["name"] != "Change air filter" || a["interval"] != "Every 3 months" ||
+			a["last_completed_on"] != "2026-04-12" || a["next_due_on"] != "2026-07-12" || a["status"] != "overdue" || a["supply"] != "Furnace filters" || a["supply_short"] != false {
+			t.Errorf("task = %v", a)
+		}
+		if all[1]["status"] != "unscheduled" {
+			t.Errorf("most urgent first: %v", all)
+		}
+		if _, leaked := all[0]["cost"]; leaked {
+			t.Error("cost in tasks")
+		}
+	}
+	// q matches a supply name, the task name, the item name; not nonsense.
+	for _, q := range []string{"furnace", "AIR FILTER", "epson"} {
+		if got := get("umd_ed", "?q="+url.QueryEscape(q), 200); len(got) != 1 || got[0]["name"] != "Change air filter" {
+			t.Errorf("q=%s: %v", q, got)
+		}
+	}
+	if got := get("umd_ed", "?q=zzz", 200); len(got) != 0 {
+		t.Errorf("q=zzz: %v", got)
+	}
+	// status filter, and place text.
+	if got := get("umd_ed", "?status=overdue", 200); len(got) != 1 || got[0]["status"] != "overdue" {
+		t.Errorf("status=overdue: %v", got)
+	}
+	if got := get("umd_ed", "?status=unscheduled", 200); len(got) != 1 || got[0]["name"] != "Wipe down" {
+		t.Errorf("status=unscheduled: %v", got)
+	}
+	if got := get("umd_ed", "?status=upcoming", 200); len(got) != 0 {
+		t.Errorf("status=upcoming: %v", got)
+	}
+	if got := get("umd_ed", "?place=kitchen", 200); len(got) != 1 || got[0]["item"] != "Folding chairs" {
+		t.Errorf("place=kitchen: %v", got)
+	}
+	get("umd_ed", "?status=bogus", 400)
+	// Gate: no token and another audience.
+	for _, tok := range []string{"", "umd_for_calendar"} {
+		c.meGet("/api/v1/me/tasks", tok, 401)
+		c.meGet("/api/v1/me/history", tok, 401)
+	}
+}
+
+func TestMeHistory(t *testing.T) {
+	st, _, ed := meFixture(t)
+	meMaintFixture(t, ed)
+	f := newFakeTokenUM(t)
+	_, c := meServer(t, st, f)
+	f.give("umd_ed", "s-ed", "ed", "editor")
+	f.give("umd_ad", "s-ad", "admin", "admin")
+
+	get := func(tok, q string, want int) []map[string]any {
+		body := c.meGet("/api/v1/me/history"+q, tok, want)
+		if strings.Contains(body, "12.50") || strings.Contains(body, "cost") {
+			t.Errorf("cost leaked: %s", body)
+		}
+		var raw map[string][]map[string]any
+		json.Unmarshal([]byte(body), &raw)
+		return raw["history"]
+	}
+	for _, tok := range []string{"umd_ed", "umd_ad"} {
+		all := get(tok, "", 200)
+		if len(all) != 2 {
+			t.Fatalf("history = %v", all)
+		}
+		checkKeys(t, "log", all[0], "id", "performed_on", "item", "place", "task", "kind", "replaced", "units", "supply_used", "performed_by", "notes")
+		if all[0]["performed_on"] != "2026-04-12" || all[1]["performed_on"] != "2026-01-10" {
+			t.Errorf("newest first: %v", all)
+		}
+		if all[0]["task"] != "Change air filter" || all[0]["item"] != "Epson projector" {
+			t.Errorf("entry = %v", all[0])
+		}
+	}
+	// q finds supply-name matches ("furnace"), task names, and not others.
+	if got := get("umd_ed", "?q=furnace", 200); len(got) != 2 {
+		t.Errorf("q=furnace: %v", got)
+	}
+	if got := get("umd_ed", "?q=filter", 200); len(got) != 2 {
+		t.Errorf("q=filter: %v", got)
+	}
+	if got := get("umd_ed", "?q=chairs", 200); len(got) != 0 {
+		t.Errorf("q=chairs: %v", got)
+	}
+	// since, item, limit.
+	if got := get("umd_ed", "?since=2026-03-01", 200); len(got) != 1 || got[0]["performed_on"] != "2026-04-12" {
+		t.Errorf("since: %v", got)
+	}
+	if got := get("umd_ed", "?since=2026-04-12", 200); len(got) != 1 {
+		t.Errorf("since is inclusive: %v", got)
+	}
+	if got := get("umd_ed", "?item=2", 200); len(got) != 0 {
+		t.Errorf("item=2: %v", got)
+	}
+	if got := get("umd_ed", "?limit=1", 200); len(got) != 1 {
+		t.Errorf("limit: %v", got)
+	}
+	get("umd_ed", "?since=yesterday", 400)
+	get("umd_ed", "?item=x", 400)
+}
+
+// With no q and no low, supplies lists them all (the stock overview).
+func TestMeSuppliesAll(t *testing.T) {
+	st, _, _ := meFixture(t)
+	f := newFakeTokenUM(t)
+	_, c := meServer(t, st, f)
+	f.give("umd_ed", "s-ed", "ed", "editor")
+	if body := c.meGet("/api/v1/me/supplies", "umd_ed", 200); strings.Count(body, `"unit"`) != 2 || !strings.Contains(body, "Dish soap") || !strings.Contains(body, "Paper towels") {
+		t.Errorf("supplies: %s", body)
+	}
+}
+
+// A group item (four air returns in one room) shows its count, each unit's
+// label and when its filter was last replaced, how many filters a check
+// uses, and which units a history entry was about.
+func TestMeUnits(t *testing.T) {
+	st, _, ed := meFixture(t)
+	meMaintFixture(t, ed) // supply 3: Furnace filters
+	it := &store.Item{PlaceID: 3, Name: "Air Return", Category: "HVAC", Quantity: 4, SupplyID: 3, SupplyPer: 1, Notes: "covers lift off"}
+	if err := st.SaveItem(it, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveUnits(it.ID, []store.Unit{{Number: 1, Label: "Northwest"}, {Number: 2, Label: "Southwest"},
+		{Number: 3, Label: "Northeast"}, {Number: 4, Label: "Southeast"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(it.ID, 10)
+	ed.post("/tasks/new?item="+id, "/tasks", url.Values{"item_id": {id}, "name": {"Check Filters"}, "description": {"Look at all four"},
+		"uses_supply": {"1"}, "supply_id": {"3"}, "supply_amount": {"4"}, "recurring": {"1"}, "interval_value": {"1"}, "interval_unit": {"months"}}, 200)
+	if err := st.RecordMaintenance(store.Completion{ItemID: it.ID, Kind: "replaced", Replaced: 2, Units: []int{1, 3}, PerformedOn: "2026-11-07"}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeTokenUM(t)
+	_, c := meServer(t, st, f)
+	f.give("umd_ed", "s-ed", "ed", "editor")
+
+	var tasks map[string][]map[string]any
+	json.Unmarshal([]byte(c.meGet("/api/v1/me/tasks?q=check+filters", "umd_ed", 200)), &tasks)
+	if len(tasks["tasks"]) != 1 {
+		t.Fatalf("tasks = %v", tasks)
+	}
+	task := tasks["tasks"][0]
+	if task["quantity"] != 4.0 || task["supply_amount"] != 4.0 || task["description"] != "Look at all four" || task["item_notes"] != "covers lift off" {
+		t.Errorf("task = %v", task)
+	}
+	units, _ := task["units"].([]any)
+	if len(units) != 4 {
+		t.Fatalf("units = %v", task["units"])
+	}
+	u1, u2 := units[0].(map[string]any), units[1].(map[string]any)
+	if u1["label"] != "Northwest" || u1["last_replaced"] != "2026-11-07" || u2["label"] != "Southwest" || u2["last_replaced"] != "" {
+		t.Errorf("units = %v", units)
+	}
+	checkKeys(t, "unit", u1, "number", "id", "label", "last_replaced")
+
+	var hist map[string][]map[string]any
+	json.Unmarshal([]byte(c.meGet("/api/v1/me/history?item="+id, "umd_ed", 200)), &hist)
+	if len(hist["history"]) != 1 {
+		t.Fatalf("history = %v", hist)
+	}
+	if h := hist["history"][0]; h["units"] != "#1 – Northwest; #3 – Northeast" || h["replaced"] != "2 × Furnace filters" {
+		t.Errorf("history = %v", h)
+	}
+
+	var items map[string][]map[string]any
+	json.Unmarshal([]byte(c.meGet("/api/v1/me/items?q=air+return", "umd_ed", 200)), &items)
+	if len(items["items"]) != 1 || items["items"][0]["supply"] != "Furnace filters" || len(items["items"][0]["units"].([]any)) != 4 {
+		t.Errorf("items = %v", items)
 	}
 }

@@ -114,11 +114,12 @@
               {{with .UnitsLabel}}<span class="muted">· {{.}}</span>{{end}}
               {{if .Notes}}{{range lines .Notes}}<div class="small">{{.}}</div>{{end}}{{end}}
               {{if .SupplyUsed}}<div class="muted small">Took {{.SupplyUsed}} from supplies</div>{{else if eq .Kind "replaced"}}<div class="muted small">Not taken from supplies</div>{{end}}
+              {{if and $.ShowItem (ne .Kind "moved")}}<div class="small"><a href="/logs/{{.ID}}/edit?next=/history">Edit</a></div>{{end}}
             </div></td>
             <td data-label="Done by"><div>{{.PerformedBy}}{{if and .CreatedBy (ne .CreatedBy .PerformedBy)}}<div class="muted small">entered by {{.CreatedBy}}</div>{{end}}</div></td>
             <td data-label="Cost" class="num">{{.Cost}}</td>
             {{if not $.ShowItem}}
-              <td class="actions">{{template "delete-button" (dict "Action" (printf "/logs/%d/delete" .ID) "CSRF" $.CSRF "Label" "Delete" "Confirm" (or (and .SupplyUsed (printf "Delete this history entry? The %s it used will be put back in stock." .SupplyUsed)) "Delete this history entry?"))}}</td>
+              <td class="actions">{{if ne .Kind "moved"}}<a class="btn btn--ghost btn--sm" href="/logs/{{.ID}}/edit">Edit</a>{{end}}{{template "delete-button" (dict "Action" (printf "/logs/%d/delete" .ID) "CSRF" $.CSRF "Label" "Delete" "Confirm" (or (and .SupplyUsed (printf "Delete this history entry? The %s it used will be put back in stock." .SupplyUsed)) "Delete this history entry?"))}}</td>
             {{end}}
           </tr>
         {{end}}

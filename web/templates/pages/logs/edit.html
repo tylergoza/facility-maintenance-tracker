@@ -1,0 +1,65 @@
+{{define "content"}}
+{{$l := .Log}}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/items/{{.Item.ID}}">{{.Item.Name}}</a> <span class="muted">· {{.Item.Location}}</span></nav>
+<div class="page-head">
+  <div>
+    <h1>Edit history: {{.Heading}}</h1>
+    <p class="muted">Correct what was recorded. Supplies are put back and taken again to match, and the task's dates follow.</p>
+  </div>
+</div>
+<div class="card narrow">
+  {{template "errors" .Errors}}
+  <form method="post" action="/logs/{{$l.ID}}/edit" class="form"
+        data-controller="unit-count" data-unit-count-per-value="{{.UnitSupplyPer}}">
+    {{template "csrf" .CSRF}}
+    <input type="hidden" name="next" value="{{.Next}}">
+    <div class="field-row">
+      <div class="field">
+        <label for="performed_on">Date done</label>
+        <input id="performed_on" name="performed_on" type="date" value="{{.Form.PerformedOn}}" max="{{today}}" required>
+      </div>
+      <div class="field">
+        <label for="performed_by">Done by</label>
+        <input id="performed_by" name="performed_by" value="{{.Form.PerformedBy}}" placeholder="Name or company">
+      </div>
+    </div>
+    {{template "unit-picker" (dict "Units" .Units "Selected" .Form.Units)}}
+    {{if eq $l.Kind "replaced"}}
+      <div class="field field--narrow">
+        <label for="replaced">How many were replaced</label>
+        <input id="replaced" name="replaced" type="number" min="1" step="1" inputmode="numeric" value="{{or .Form.Replaced 1}}" required>
+      </div>
+    {{end}}
+    {{with .Supply}}
+      <fieldset class="fieldset" data-controller="reveal" data-action="change->reveal#update">
+        <legend>Supplies</legend>
+        <p class="small">
+          <a href="/supplies/{{.ID}}">{{.Name}}</a> · {{.QuantityLabel}} on hand {{template "stock-badge" .}}
+          <span class="muted">({{.Location}})</span>
+        </p>
+        <label class="check">
+          <input type="checkbox" name="took_supply" value="1" {{if $.Form.SupplyID}}checked{{end}}>
+          Took it from supplies
+        </label>
+        <div class="field field--narrow" data-reveal-target="section" data-reveal-when="took_supply=1">
+          <label for="supply_amount">How many</label>
+          <input id="supply_amount" name="supply_amount" type="number" min="1" step="1" inputmode="numeric" value="{{or $.Form.SupplyAmount 1}}" data-unit-count-target="amount">
+        </div>
+        <p class="hint">Unticked means none came out of stock (looked fine, or came from somewhere else).</p>
+      </fieldset>
+    {{end}}
+    <div class="field">
+      <label for="cost">Cost <span class="optional">optional</span></label>
+      <input id="cost" name="cost" inputmode="decimal" placeholder="0.00" value="{{with .Form.CostCents}}{{printf "%.2f" (divf .)}}{{end}}">
+    </div>
+    <div class="field">
+      <label for="notes">Notes <span class="optional">optional</span></label>
+      <textarea id="notes" name="notes" rows="4" placeholder="What was done, the state of things, anything to watch for next time">{{.Form.Notes}}</textarea>
+    </div>
+    <div class="form__actions">
+      <button type="submit" class="btn btn--primary">Save correction</button>
+      <a class="btn btn--ghost" href="{{if .Next}}{{.Next}}{{else}}/items/{{.Item.ID}}{{end}}">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

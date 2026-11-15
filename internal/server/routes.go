@@ -128,6 +128,8 @@ func (s *Server) routes() http.Handler {
 	auth("GET /tasks/{id}/complete", s.handleTaskCompleteForm)
 	auth("POST /tasks/{id}/complete", s.handleTaskComplete)
 
+	auth("GET /logs/{id}/edit", s.handleLogEditForm)
+	auth("POST /logs/{id}/edit", s.handleLogUpdate)
 	auth("POST /logs/{id}/delete", s.handleLogDelete)
 	auth("GET /history", s.handleHistory)
 

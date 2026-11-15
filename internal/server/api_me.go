@@ -2,8 +2,10 @@ package server
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tylergoza/facility-maintenance-tracker/internal/store"
 	"github.com/tylergoza/facility-maintenance-tracker/internal/umtoken"
@@ -27,6 +29,8 @@ func (s *Server) meRoutes(mux *http.ServeMux) {
 	s.meRoute(mux, "GET /api/v1/me/products", s.meProducts)
 	s.meRoute(mux, "GET /api/v1/me/items", s.meItems)
 	s.meRoute(mux, "GET /api/v1/me/supplies", s.meSupplies)
+	s.meRoute(mux, "GET /api/v1/me/tasks", s.meTasks)
+	s.meRoute(mux, "GET /api/v1/me/history", s.meHistory)
 	s.meCatchAll(mux)
 }
 
@@ -76,13 +80,78 @@ type meProductJSON struct {
 }
 
 type meItemJSON struct {
-	ID           int64       `json:"id"`
-	Name         string      `json:"name"`
-	Category     string      `json:"category"`
-	Quantity     int         `json:"quantity"`
-	Place        apiPlaceRef `json:"place"`
-	Manufacturer string      `json:"manufacturer"`
-	Model        string      `json:"model"`
+	ID           int64        `json:"id"`
+	Name         string       `json:"name"`
+	Category     string       `json:"category"`
+	Quantity     int          `json:"quantity"`
+	Place        apiPlaceRef  `json:"place"`
+	Manufacturer string       `json:"manufacturer"`
+	Model        string       `json:"model"`
+	Notes        string       `json:"notes"`
+	Supply       string       `json:"supply"`     // what each one uses, e.g. "14x30 Filter"; "" if none
+	SupplyPer    int          `json:"supply_per"` // how many of it each one takes
+	Units        []meUnitJSON `json:"units"`      // numbered units of a group item (Quantity > 1), else []
+}
+
+// meUnitJSON is one numbered unit of a group item, e.g. one of the four
+// air returns in the fellowship hall, with when its supply was last
+// replaced (from history entries that name the unit).
+type meUnitJSON struct {
+	Number       int    `json:"number"`
+	ID           string `json:"id"`    // its tag, or its number
+	Label        string `json:"label"` // where it is, e.g. "Northwest (away from sanctuary)"
+	LastReplaced string `json:"last_replaced"`
+}
+
+// meUnits loads items' units once per item for one response.
+type meUnits struct {
+	s     *Server
+	items map[int64]*store.Item
+	units map[int64][]meUnitJSON
+}
+
+func (s *Server) newMeUnits() *meUnits {
+	return &meUnits{s: s, items: map[int64]*store.Item{}, units: map[int64][]meUnitJSON{}}
+}
+
+// item returns the item (nil if it can't be read) and its units.
+func (m *meUnits) item(id int64) (*store.Item, []meUnitJSON) {
+	if it, ok := m.items[id]; ok {
+		return it, m.units[id]
+	}
+	it, err := m.s.store.GetItem(id)
+	if err != nil {
+		m.items[id] = nil
+		return nil, []meUnitJSON{}
+	}
+	out := []meUnitJSON{}
+	if it.HasUnits() {
+		if units, err := m.s.store.ItemUnits(it.ID, it.Quantity, m.s.todayTime()); err == nil {
+			for _, u := range units {
+				out = append(out, meUnitJSON{Number: u.Number, ID: u.ID(), Label: u.Label, LastReplaced: u.LastReplaced})
+			}
+		}
+	}
+	m.items[id], m.units[id] = it, out
+	return it, out
+}
+
+// names renders units by number with their labels, e.g.
+// "#1 – Northwest (away from sanctuary)"; "" for none.
+func (m *meUnits) names(itemID int64, numbers []int) string {
+	if len(numbers) == 0 {
+		return ""
+	}
+	_, units := m.item(itemID)
+	parts := make([]string, 0, len(numbers))
+	for _, n := range numbers {
+		name := "#" + strconv.Itoa(n)
+		if n >= 1 && n <= len(units) && units[n-1].Label != "" {
+			name += " – " + units[n-1].Label
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, "; ")
 }
 
 type meSupplyJSON struct {
@@ -142,10 +211,16 @@ func (s *Server) meItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []meItemJSON{}
+	mu := s.newMeUnits()
 	for _, i := range items[:min(len(items), meLimit(r))] {
 		j := itemJSON(i)
+		_, units := mu.item(i.ID)
+		supply := ""
+		if i.SupplyID != 0 {
+			supply = i.Supply.Name
+		}
 		out = append(out, meItemJSON{ID: j.ID, Name: j.Name, Category: j.Category, Quantity: j.Quantity, Place: j.Place,
-			Manufacturer: j.Manufacturer, Model: j.Model})
+			Manufacturer: j.Manufacturer, Model: j.Model, Notes: i.Notes, Supply: supply, SupplyPer: i.SupplyPer, Units: units})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
@@ -164,4 +239,142 @@ func (s *Server) meSupplies(w http.ResponseWriter, r *http.Request) {
 		out = append(out, meSupplyJSON{ID: j.ID, Name: j.Name, Unit: j.Unit, Place: j.Place, OnHand: j.OnHand, Total: j.Total, Stock: j.Stock})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"supplies": out})
+}
+
+type meTaskJSON struct {
+	ID              int64        `json:"id"`
+	Item            string       `json:"item"`
+	Place           apiPlaceRef  `json:"place"`
+	Name            string       `json:"name"`
+	Interval        string       `json:"interval"`
+	LastCompletedOn string       `json:"last_completed_on"`
+	NextDueOn       string       `json:"next_due_on"`
+	Status          string       `json:"status"` // overdue, due-soon, upcoming or unscheduled
+	Supply          string       `json:"supply"`
+	SupplyAmount    int          `json:"supply_amount"` // how many of the supply one completion uses; 0 if none
+	SupplyShort     bool         `json:"supply_short"`
+	Description     string       `json:"description"` // the task's own instructions
+	Quantity        int          `json:"quantity"`    // how many the item counts, e.g. 4 air returns
+	ItemNotes       string       `json:"item_notes"`
+	Units           []meUnitJSON `json:"units"` // the item's numbered units, each checked by this task; [] if one
+}
+
+type meHistoryJSON struct {
+	ID          int64       `json:"id"`
+	PerformedOn string      `json:"performed_on"`
+	Item        string      `json:"item"`
+	Place       apiPlaceRef `json:"place"`
+	Task        string      `json:"task"`
+	Kind        string      `json:"kind"` // work, replaced or moved
+	Replaced    string      `json:"replaced"`
+	Units       string      `json:"units"`       // which of a group item's units, e.g. "#1 – Northwest; #3 – Northeast"; "" for all/one
+	SupplyUsed  string      `json:"supply_used"` // stock taken, e.g. "4 × 14x30 Filter"; "" if none
+	PerformedBy string      `json:"performed_by"`
+	Notes       string      `json:"notes"`
+}
+
+// meTasks: GET /api/v1/me/tasks?q=&status=&place=&limit=. Active tasks,
+// most urgent first (the Maintenance page's order: overdue, due soon,
+// upcoming, unscheduled; soonest due first within each). q matches the
+// item (product) name, task name or supply name; place is text matched
+// against the item's place path. Every signed-in person sees maintenance
+// on the web (the pages are behind login only, not admin-only).
+func (s *Server) meTasks(w http.ResponseWriter, r *http.Request) {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	switch store.Status(status) {
+	case "", store.StatusOverdue, store.StatusDueSoon, store.StatusUpcoming, store.StatusUnscheduled:
+	default:
+		apiError(w, http.StatusBadRequest, "status must be overdue, due-soon, upcoming or unscheduled")
+		return
+	}
+	tasks, err := s.store.ListTasks(store.TaskFilter{ActiveOnly: true, Query: meQuery(r)})
+	if err != nil {
+		s.apiServerError(w, r, err)
+		return
+	}
+	place := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("place")))
+	type ranked struct {
+		t  store.Task
+		st store.Status
+	}
+	var keep []ranked
+	for _, t := range tasks {
+		st := s.status(t.NextDueOn)
+		if status != "" && string(st) != status {
+			continue
+		}
+		if place != "" && !strings.Contains(strings.ToLower(t.Place.Path), place) {
+			continue
+		}
+		keep = append(keep, ranked{t, st})
+	}
+	sort.SliceStable(keep, func(i, j int) bool { return keep[i].st.Rank() < keep[j].st.Rank() })
+	out := []meTaskJSON{}
+	mu := s.newMeUnits()
+	for _, k := range keep[:min(len(keep), meLimit(r))] {
+		t := k.t
+		qty, notes := 1, ""
+		it, units := mu.item(t.ItemID)
+		if it != nil {
+			qty, notes = it.Quantity, it.Notes
+		}
+		amount := 0
+		if t.SupplyID != 0 {
+			amount = t.SupplyAmount
+		}
+		out = append(out, meTaskJSON{ID: t.ID, Item: t.ItemName, Place: apiPlaceRef{t.PlaceID, t.Place.Path}, Name: t.Name,
+			Interval: t.IntervalLabel(), LastCompletedOn: t.LastCompletedOn, NextDueOn: t.NextDueOn, Status: string(k.st),
+			Supply: t.Supply.Name, SupplyAmount: amount, SupplyShort: t.SupplyShort(), Description: t.Description,
+			Quantity: qty, ItemNotes: notes, Units: units})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": out})
+}
+
+// meHistory: GET /api/v1/me/history?q=&item=&since=YYYY-MM-DD&limit=, the
+// History page's entries (newest first). q matches item (product), task or
+// supply name; item is an item id. Cost is left out: the AI tools don't
+// use it.
+func (s *Server) meHistory(w http.ResponseWriter, r *http.Request) {
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
+	if since != "" {
+		if _, err := time.Parse(store.DateLayout, since); err != nil {
+			apiError(w, http.StatusBadRequest, "since must be a date like 2026-01-31")
+			return
+		}
+	}
+	f := store.LogFilter{Query: meQuery(r), Since: since, Limit: meLimit(r)}
+	if v := strings.TrimSpace(r.URL.Query().Get("item")); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id <= 0 {
+			apiError(w, http.StatusBadRequest, "item must be an item id")
+			return
+		}
+		f.ItemID = id
+	}
+	logs, err := s.store.ListLogs(f)
+	if err != nil {
+		s.apiServerError(w, r, err)
+		return
+	}
+	out := []meHistoryJSON{}
+	mu := s.newMeUnits()
+	for _, l := range logs {
+		rep := ""
+		// Replacements also happen during task work (kind "work"), e.g.
+		// two filters swapped while doing "Check Filters".
+		if l.Replaced > 0 {
+			rep = strconv.Itoa(l.Replaced)
+			if l.SupplyName != "" {
+				rep += " × " + l.SupplyName
+			}
+		}
+		by := l.PerformedBy
+		if by == "" {
+			by = l.CreatedBy
+		}
+		out = append(out, meHistoryJSON{ID: l.ID, PerformedOn: l.PerformedOn, Item: l.ItemName, Place: apiPlaceRef{l.Place.ID, l.Place.Path},
+			Task: l.TaskName, Kind: l.Kind, Replaced: rep, Units: mu.names(l.ItemID, l.Units), SupplyUsed: l.SupplyUsed,
+			PerformedBy: by, Notes: l.Notes})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": out})
 }

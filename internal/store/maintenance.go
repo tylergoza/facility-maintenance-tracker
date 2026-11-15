@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -167,6 +168,9 @@ type TaskFilter struct {
 	PlaceID    int64 // items in this place or anywhere inside it
 	SupplyID   int64
 	ActiveOnly bool
+	// Query keeps tasks whose item/product name, task name or supply name
+	// contains it (any case).
+	Query string
 }
 
 const taskSelect = `
@@ -225,6 +229,11 @@ func (s *Store) ListTasks(f TaskFilter) ([]Task, error) {
 	}
 	if f.ActiveOnly {
 		q += ` AND t.active = 1`
+	}
+	if f.Query != "" {
+		like := "%" + f.Query + "%"
+		q += ` AND (p.name LIKE ? OR t.name LIKE ? OR s.name LIKE ?)`
+		args = append(args, like, like, like)
 	}
 	q += ` ORDER BY t.active DESC, t.next_due_on IS NULL, t.next_due_on, t.name COLLATE NOCASE`
 	rows, err := s.DB.Query(q, args...)
@@ -314,8 +323,14 @@ func (l Log) Cost() string {
 }
 
 type LogFilter struct {
+	ID     int64 // just this entry
 	ItemID int64
 	Limit  int
+	// Query keeps entries whose item/product name, task name, the item's
+	// supply name or the supply taken contains it (any case).
+	Query string
+	// Since keeps entries performed on or after this YYYY-MM-DD date.
+	Since string
 }
 
 func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
@@ -335,9 +350,23 @@ func (s *Store) ListLogs(f LogFilter) ([]Log, error) {
 		LEFT JOIN supplies s ON s.id = i.supply_id
 		WHERE 1=1`
 	var args []any
+	if f.ID != 0 {
+		q += ` AND l.id = ?`
+		args = append(args, f.ID)
+	}
 	if f.ItemID != 0 {
 		q += ` AND l.item_id = ?`
 		args = append(args, f.ItemID)
+	}
+	if f.Query != "" {
+		like := "%" + f.Query + "%"
+		q += ` AND (p.name LIKE ? OR t.name LIKE ? OR s.name LIKE ? OR EXISTS (SELECT 1 FROM supply_changes c JOIN supplies cs ON cs.id = c.supply_id
+		        WHERE c.log_id = l.id AND cs.name LIKE ?))`
+		args = append(args, like, like, like, like)
+	}
+	if f.Since != "" {
+		q += ` AND l.performed_on >= ?`
+		args = append(args, f.Since)
 	}
 	q += ` ORDER BY l.performed_on DESC, l.id DESC`
 	if f.Limit > 0 {
@@ -392,6 +421,138 @@ func (s *Store) DeleteLog(id int64, userID int64) (itemID int64, err error) {
 		return 0, err
 	}
 	return itemID, tx.Commit()
+}
+
+// GetLog returns one history entry.
+func (s *Store) GetLog(id int64) (*Log, error) {
+	logs, err := s.ListLogs(LogFilter{ID: id})
+	if err != nil {
+		return nil, err
+	}
+	if len(logs) == 0 {
+		return nil, ErrNotFound
+	}
+	return &logs[0], nil
+}
+
+// LogSupplyTaken is the supply a history entry took from stock and how
+// much (0, 0 if none).
+func (s *Store) LogSupplyTaken(logID int64) (supplyID int64, amount int, err error) {
+	err = s.DB.QueryRow(`SELECT supply_id, amount FROM supply_changes WHERE log_id = ? AND kind = 'used' ORDER BY id LIMIT 1`, logID).
+		Scan(&supplyID, &amount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, nil
+	}
+	return supplyID, amount, err
+}
+
+// LogEdit corrects a history entry: when, who, which units, what was
+// taken from stock, how many were replaced, cost and notes. Its item, task
+// and kind stay.
+type LogEdit struct {
+	PerformedOn  string
+	PerformedBy  string
+	Units        []int
+	SupplyID     int64 // taken from stock; 0 for none
+	SupplyAmount int
+	Replaced     int // for "replaced" entries; others count what was taken of the item's own supply
+	CostCents    int64
+	Notes        string
+	UserID       int64
+}
+
+// UpdateLog saves a correction in one transaction. Stock the entry took is
+// put back and the new amount taken (both show in the supply's history as
+// a correction); the units are replaced, so each unit's "last replaced"
+// follows; and when the entry belongs to a task and the task's latest date
+// changes, "last completed" and (for a recurring, active task) the next due
+// date are worked out again.
+func (s *Store) UpdateLog(id int64, e LogEdit) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var itemID, taskID, itemSupply int64
+	var kind string
+	var quantity int
+	var counted bool
+	if err := tx.QueryRow(`SELECT l.item_id, COALESCE(l.task_id, 0), l.kind, COALESCE(i.supply_id, 0), i.quantity, p.counted
+		FROM maintenance_logs l JOIN items i ON i.id = l.item_id JOIN products p ON p.id = i.product_id WHERE l.id = ?`, id).
+		Scan(&itemID, &taskID, &kind, &itemSupply, &quantity, &counted); err != nil {
+		return notFound(err)
+	}
+	if counted && len(e.Units) > 0 {
+		return ErrCounted
+	}
+	if err := checkUnits(e.Units, quantity); err != nil {
+		return err
+	}
+
+	// Stock: give back what it took, unlink those changes so a later
+	// correction or delete doesn't give them back again, then take anew.
+	if err := putBackTx(tx, id, e.UserID, "Put back: history entry corrected"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE supply_changes SET log_id = NULL WHERE log_id = ? AND kind = 'used'`, id); err != nil {
+		return err
+	}
+	if e.SupplyID != 0 && e.SupplyAmount > 0 {
+		if err := adjustSupplyTx(tx, Adjustment{SupplyID: e.SupplyID, Kind: "used", Amount: e.SupplyAmount,
+			Note: "History entry corrected", UserID: e.UserID, LogID: id}); err != nil {
+			return err
+		}
+	}
+
+	replaced := 0
+	switch {
+	case kind == "replaced":
+		replaced = max(e.Replaced, 1)
+	case e.SupplyID != 0 && e.SupplyID == itemSupply:
+		replaced = e.SupplyAmount
+	}
+	if _, err := tx.Exec(`UPDATE maintenance_logs SET performed_on = ?, performed_by = ?, replaced = ?, cost_cents = ?, notes = ? WHERE id = ?`,
+		e.PerformedOn, e.PerformedBy, nullInt(int64(replaced)), nullInt(e.CostCents), e.Notes, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM log_units WHERE log_id = ?`, id); err != nil {
+		return err
+	}
+	for _, u := range e.Units {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO log_units (log_id, unit) VALUES (?, ?)`, id, u); err != nil {
+			return err
+		}
+	}
+
+	if taskID != 0 {
+		var ivalue int
+		var iunit, last string
+		var active bool
+		if err := tx.QueryRow(`SELECT COALESCE(interval_value, 0), COALESCE(interval_unit, ''), COALESCE(last_completed_on, ''), active FROM tasks WHERE id = ?`, taskID).
+			Scan(&ivalue, &iunit, &last, &active); err != nil {
+			return notFound(err)
+		}
+		var latest string
+		if err := tx.QueryRow(`SELECT COALESCE(MAX(performed_on), '') FROM maintenance_logs WHERE task_id = ?`, taskID).Scan(&latest); err != nil {
+			return err
+		}
+		if latest != "" && latest != last {
+			if active && ivalue > 0 && iunit != "" {
+				next, err := AddInterval(latest, ivalue, iunit)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`UPDATE tasks SET last_completed_on = ?, next_due_on = ? WHERE id = ?`, latest, next, taskID)
+				if err != nil {
+					return err
+				}
+			} else if _, err := tx.Exec(`UPDATE tasks SET last_completed_on = ? WHERE id = ?`, latest, taskID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // Completion records maintenance that was performed.

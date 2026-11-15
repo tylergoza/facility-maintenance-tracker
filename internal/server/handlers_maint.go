@@ -602,3 +602,137 @@ func (s *Server) guessedURL(r *http.Request) string {
 	}
 	return scheme + "://" + r.Host
 }
+
+// Correcting history -----------------------------------------------------
+
+// logEditView is what the edit page needs beyond the entry itself.
+type logEditView struct {
+	Log    *store.Log
+	Item   *store.Item
+	Supply *store.Supply // what it took or would take from stock; nil if none applies
+	Form   store.LogEdit
+}
+
+// logEditSupply picks the supply the form offers: what the entry took,
+// else its task's supply, else the item's own.
+func (s *Server) logEditSupply(l *store.Log, item *store.Item, taken int64) *store.Supply {
+	id := taken
+	if id == 0 && l.TaskID != 0 {
+		if t, err := s.store.GetTask(l.TaskID); err == nil {
+			id = t.SupplyID
+		}
+	}
+	if id == 0 {
+		id = item.SupplyID
+	}
+	if id == 0 {
+		return nil
+	}
+	sp, err := s.store.GetSupply(id)
+	if err != nil {
+		return nil
+	}
+	return sp
+}
+
+func (s *Server) loadLogEdit(w http.ResponseWriter, r *http.Request) (*logEditView, int64, int, bool) {
+	l, err := s.store.GetLog(pathID(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return nil, 0, 0, false
+	}
+	if l.Kind == "moved" {
+		s.redirect(w, r, fmt.Sprintf("/items/%d", l.ItemID), "Moves can't be edited here; delete the entry and move the item again.")
+		return nil, 0, 0, false
+	}
+	item, err := s.store.GetItem(l.ItemID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return nil, 0, 0, false
+	}
+	takenID, takenAmount, err := s.store.LogSupplyTaken(l.ID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return nil, 0, 0, false
+	}
+	return &logEditView{Log: l, Item: item, Supply: s.logEditSupply(l, item, takenID)}, takenID, takenAmount, true
+}
+
+func (s *Server) renderLogEdit(w http.ResponseWriter, r *http.Request, status int, v *logEditView, next string, errs []string) {
+	units, err := s.itemUnits(v.Item)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	per := 0
+	if v.Supply != nil && v.Supply.ID == v.Item.SupplyID {
+		per = v.Item.SupplyPer
+	}
+	title := v.Log.TaskName
+	if title == "" {
+		title = map[string]string{"replaced": "Replacement", "work": "Work"}[v.Log.Kind]
+	}
+	s.render(w, r, status, "logs/edit", map[string]any{
+		"Title": "Edit history: " + title, "Heading": title, "Log": v.Log, "Item": v.Item, "Supply": v.Supply,
+		"Form": v.Form, "Units": units, "UnitSupplyPer": per, "Next": next, "Errors": errs,
+	})
+}
+
+func (s *Server) handleLogEditForm(w http.ResponseWriter, r *http.Request) {
+	v, takenID, takenAmount, ok := s.loadLogEdit(w, r)
+	if !ok {
+		return
+	}
+	l := v.Log
+	v.Form = store.LogEdit{PerformedOn: l.PerformedOn, PerformedBy: l.PerformedBy, Units: l.Units, Replaced: l.Replaced,
+		CostCents: l.CostCents, Notes: l.Notes, SupplyID: takenID, SupplyAmount: takenAmount}
+	s.renderLogEdit(w, r, http.StatusOK, v, r.URL.Query().Get("next"), nil)
+}
+
+func (s *Server) handleLogUpdate(w http.ResponseWriter, r *http.Request) {
+	v, _, _, ok := s.loadLogEdit(w, r)
+	if !ok {
+		return
+	}
+	next := r.PostFormValue("next")
+	var c store.Completion
+	errs := s.completionFromForm(r, &c)
+	e := store.LogEdit{PerformedOn: c.PerformedOn, PerformedBy: c.PerformedBy, Notes: c.Notes, CostCents: c.CostCents,
+		Units: formUnits(r, v.Item), UserID: currentUser(r).ID}
+	if v.Supply != nil && r.PostFormValue("took_supply") == "1" {
+		e.SupplyID = v.Supply.ID
+		amount, err := strconv.Atoi(formStr(r, "supply_amount"))
+		if err != nil || amount < 1 {
+			errs = append(errs, "How many "+v.Supply.Name+" were taken must be 1 or more.")
+		}
+		e.SupplyAmount = max(amount, 1)
+	}
+	if v.Log.Kind == "replaced" {
+		n, err := strconv.Atoi(formStr(r, "replaced"))
+		if err != nil || n < 1 {
+			errs = append(errs, "How many were replaced must be 1 or more.")
+		}
+		e.Replaced = max(n, 1)
+	}
+	if v.Log.Kind == "work" && v.Log.TaskID == 0 && e.Notes == "" {
+		errs = append(errs, "Describe the work that was done.")
+	}
+	v.Form = e
+	if errs != nil {
+		s.renderLogEdit(w, r, http.StatusUnprocessableEntity, v, next, errs)
+		return
+	}
+	var short *store.NotEnoughError
+	if err := s.store.UpdateLog(v.Log.ID, e); errors.As(err, &short) {
+		s.renderLogEdit(w, r, http.StatusUnprocessableEntity, v, next, []string{fmt.Sprintf(
+			"There's %s of %s. Untick \"Took it from supplies\" if it came from somewhere else, or restock it first.", short.Error(), v.Supply.Name)})
+		return
+	} else if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if next == "" {
+		next = fmt.Sprintf("/items/%d", v.Log.ItemID)
+	}
+	s.redirect(w, r, safeRedirect(next), "History entry corrected. Any supplies it took were put back and taken again to match.")
+}
